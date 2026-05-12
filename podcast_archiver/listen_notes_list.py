@@ -6,8 +6,9 @@ from urllib.parse import urljoin, urlparse
 import html
 import re
 from bs4 import BeautifulSoup
-from requests import session
 from .listen_notes import Episode
+from datetime import datetime, timezone
+
 
 
 def _extract_one_int(patterns: list[str], text: str) -> int | None:
@@ -168,10 +169,9 @@ def _episode_from_api_item(item: dict) -> Episode:
         or "Podcast"
     )
 
-    author = (
-        channel.get("author")
-        or podcast_title
-    )
+    # Listen Notes API 的 channel.author 可能是 uploader / slug，
+    # 例如 lamesbond。这里统一用 podcast title，保证 tag artist 稳定。
+    author = podcast_title
 
     cover_url = (
         item.get("episode_specific_image_big")
@@ -357,46 +357,199 @@ def fetch_more_episodes_from_listen_notes_api(
 
     return episodes
 
+def _normalize_html(text: str) -> str:
+    """
+    用于 regex 前的轻度归一化。
+    """
+    if not text:
+        return ""
+
+    text = html.unescape(text)
+    text = text.replace("\\/", "/")
+    return text
+
+
 def _extract_channel_uuid(page_html: str) -> str:
     """
-    从 Listen Notes podcast 页面 HTML 中提取 channel_uuid。
+    从 Listen Notes 页面 HTML 中提取 channel_uuid。
     """
+    text = _normalize_html(page_html)
+
     patterns = [
         r'"channel_uuid"\s*:\s*"([a-f0-9]{32})"',
         r'"channelUuid"\s*:\s*"([a-f0-9]{32})"',
+        r'"channelUUID"\s*:\s*"([a-f0-9]{32})"',
+        r'"channel"\s*:\s*\{[^{}]{0,2000}?"channel_uuid"\s*:\s*"([a-f0-9]{32})"',
         r"/endpoints/v1/channels/([a-f0-9]{32})/episodes",
+        r"endpoints/v1/channels/([a-f0-9]{32})/episodes",
+        r"data-channel-uuid=[\"']([a-f0-9]{32})[\"']",
+        r"channel_uuid=[\"']?([a-f0-9]{32})",
     ]
 
     for pattern in patterns:
-        m = re.search(pattern, page_html, re.I)
+        m = re.search(pattern, text, re.I | re.S)
         if m:
             return m.group(1)
 
     return ""
 
 
+def _iso_to_ms(value: str) -> int | None:
+    """
+    ISO datetime -> epoch milliseconds.
+    """
+    if not value:
+        return None
+
+    try:
+        value = value.strip()
+
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+
+        dt = datetime.fromisoformat(value)
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        return int(dt.timestamp() * 1000)
+
+    except Exception:
+        return None
+
+
+def _extract_pub_date_values_from_html(page_html: str) -> list[int]:
+    """
+    从 HTML / script / JSON-LD 中尽量提取 pub_date_ms。
+    """
+    text = _normalize_html(page_html)
+    values: list[int] = []
+
+    int_patterns = [
+        r'"pub_date_ms"\s*:\s*(\d{12,16})',
+        r'"pubDateMs"\s*:\s*(\d{12,16})',
+        r'"pub_date"\s*:\s*(\d{12,16})',
+        r"data-pub-date-ms=[\"'](\d{12,16})[\"']",
+        r"pub_date_ms\s*[:=]\s*(\d{12,16})",
+    ]
+
+    for pattern in int_patterns:
+        for m in re.finditer(pattern, text, re.I):
+            try:
+                values.append(int(m.group(1)))
+            except Exception:
+                pass
+
+    iso_patterns = [
+        r'"pub_date_iso"\s*:\s*"([^"]+)"',
+        r'"datePublished"\s*:\s*"([^"]+)"',
+        r"datetime=['\"]([^'\"]+)['\"]",
+    ]
+
+    for pattern in iso_patterns:
+        for m in re.finditer(pattern, text, re.I):
+            ms = _iso_to_ms(m.group(1))
+            if ms:
+                values.append(ms)
+
+    # 去重，保持顺序
+    result = []
+    seen = set()
+
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+
+    return result
+
+
 def _extract_pub_date_range_from_html(page_html: str) -> tuple[int | None, int | None]:
     """
-    从首屏 HTML 中提取 latest / oldest pub_date_ms。
-
-    用于初始化 Load more 的：
-    - prev_pub_date: 首屏最新一条 pub_date_ms
-    - next_pub_date: 首屏最旧一条 pub_date_ms
-
-    如果 HTML 里没有直接暴露，就返回 (None, None)。
+    返回：
+    - prev_pub_date: 当前页最新一条
+    - next_pub_date: 当前页最旧一条
     """
-    values = []
-
-    for m in re.finditer(r'"pub_date_ms"\s*:\s*(\d+)', page_html):
-        try:
-            values.append(int(m.group(1)))
-        except Exception:
-            pass
+    values = _extract_pub_date_values_from_html(page_html)
 
     if not values:
         return None, None
 
     return max(values), min(values)
+
+
+def _extract_context_from_episode_html(page_html: str) -> dict:
+    """
+    从 episode 页面提取 channel_uuid / pub_date_ms。
+    """
+    channel_uuid = _extract_channel_uuid(page_html)
+    values = _extract_pub_date_values_from_html(page_html)
+
+    pub_date_ms = None
+    if values:
+        # episode 页面理论上只有一个主 pub_date；取最大值更稳一点
+        pub_date_ms = max(values)
+
+    return {
+        "channel_uuid": channel_uuid,
+        "pub_date_ms": pub_date_ms,
+    }
+
+
+def _fill_list_context_from_episode_pages(ctx: dict, session) -> dict:
+    """
+    列表页上下文不足时，从首尾 episode 页面补 channel_uuid / pub_date cursor。
+    """
+    links = ctx.get("links") or []
+
+    if not links:
+        return ctx
+
+    need_channel = not ctx.get("channel_uuid")
+    need_dates = not ctx.get("prev_pub_date") or not ctx.get("next_pub_date")
+
+    if not need_channel and not need_dates:
+        return ctx
+
+    first_url = links[0]
+    last_url = links[-1]
+
+    first_ctx = {}
+    last_ctx = {}
+
+    try:
+        first_html = _fetch_episode_page_for_context(first_url, session=session)
+        first_ctx = _extract_context_from_episode_html(first_html)
+    except Exception as e:
+        print(f"[WARN] failed to extract context from first episode: {e}")
+
+    if last_url != first_url:
+        try:
+            last_html = _fetch_episode_page_for_context(last_url, session=session)
+            last_ctx = _extract_context_from_episode_html(last_html)
+        except Exception as e:
+            print(f"[WARN] failed to extract context from last episode: {e}")
+
+    if not ctx.get("channel_uuid"):
+        ctx["channel_uuid"] = (
+            first_ctx.get("channel_uuid")
+            or last_ctx.get("channel_uuid")
+            or ""
+        )
+
+    pub_values = []
+
+    for item in [first_ctx, last_ctx]:
+        value = item.get("pub_date_ms")
+        if isinstance(value, int):
+            pub_values.append(value)
+
+    if pub_values:
+        ctx["prev_pub_date"] = ctx.get("prev_pub_date") or max(pub_values)
+        ctx["next_pub_date"] = ctx.get("next_pub_date") or min(pub_values)
+
+    return ctx
 
 
 def is_listen_notes_podcast_page(url: str) -> bool:
@@ -556,13 +709,6 @@ def _extract_next_page_url(page_url: str, page_html: str) -> str:
     return ""
 
 def extract_listen_notes_list_context(page_url: str, session) -> dict:
-    """
-    提取 Listen Notes 列表页上下文：
-    - 首屏 links
-    - channel_uuid
-    - prev_pub_date
-    - next_pub_date
-    """
     page_html = _fetch_list_page(page_url, session=session)
 
     links = _extract_episode_links_from_html(page_url, page_html)
@@ -578,6 +724,11 @@ def extract_listen_notes_list_context(page_url: str, session) -> dict:
     }
 
     ctx = _fill_list_context_from_episode_pages(ctx, session=session)
+
+    if not ctx.get("channel_uuid") or not ctx.get("prev_pub_date") or not ctx.get("next_pub_date"):
+        with open("debug_listennotes_context.html", "w", encoding="utf-8") as f:
+            f.write(page_html)
+        print("[WARN] list context incomplete; saved debug_listennotes_context.html")
 
     return ctx
 

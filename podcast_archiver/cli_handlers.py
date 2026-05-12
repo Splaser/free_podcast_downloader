@@ -209,6 +209,19 @@ def handle_listen_notes_list_url(url: str, args) -> int:
             referer_url=url,
         )
 
+    if (
+        args.max_pages > 1
+        and wanted is not None
+        and wanted > len(first_page_links)
+        and not need_more
+    ):
+        print("[WARN] Load-more requested but context is incomplete.")
+        print(f"[WARN] wanted={wanted}, first_page_links={len(first_page_links)}")
+        print(f"[WARN] channel_uuid={channel_uuid or '(not found)'}")
+        print(f"[WARN] prev_pub_date={prev_pub_date}")
+        print(f"[WARN] next_pub_date={next_pub_date}")
+        print("[HINT] Auto context extraction failed. Check debug_listennotes_context.html or pass override args.")
+
     # --list 模式：
     # 首屏显示 URL，API 页显示 source_url
     if args.list:
