@@ -221,4 +221,6 @@ __marimo__/
 *.mp3
 *.m4a
 
+*.html
+
 downloads/
