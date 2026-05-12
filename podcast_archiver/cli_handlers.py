@@ -23,6 +23,7 @@ from .listen_notes_list import (
     extract_listen_notes_list_context,
     fetch_more_episodes_from_listen_notes_api
 )
+from .typlog import probe_episode, download_typlog_episode
 
 
 
@@ -152,6 +153,45 @@ def handle_url(url: str, args) -> int:
 
     if "mp.weixin.qq.com" in host:
         return handle_wechat_url(url, args)
+
+    if "siji.typlog.io" in host:
+        # 判断是单条 episode 或 archive 页面
+        if "/archive/" in url:
+            # archive -> 批量
+            import requests
+            from bs4 import BeautifulSoup
+            from urllib.parse import urljoin
+
+            resp = requests.get(url)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # 收集 episode slugs
+            episode_links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if href.startswith("/episodes/") and href != "/episodes/":
+                    episode_links.append(urljoin(url, href))
+
+            episode_links = list(dict.fromkeys(episode_links))
+
+            print(f"[INFO] found {len(episode_links)} episode links in archive")
+
+            for ep_url in episode_links:
+                print(f"[INFO] downloading {ep_url}")
+                download_typlog_episode(ep_url, output_dir=args.output,
+                                        session=None, write_tag=not args.no_tag,
+                                        retag_existing=args.retag_existing)
+            return 0
+        else:
+            # 单条 episode
+            if args.list:
+                print(f"[INFO] Typlog episode: {url}")
+                return 0
+            download_typlog_episode(url, output_dir=args.output,
+                                    session=None, write_tag=not args.no_tag,
+                                    retag_existing=args.retag_existing)
+            return 0
 
     print(f"[ERROR] unsupported URL host: {host}")
     print("[HINT] Currently supported URL hosts: listennotes.com, mp.weixin.qq.com")

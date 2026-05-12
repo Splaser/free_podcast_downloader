@@ -16,7 +16,7 @@ if (Test-Path $logFile) {
     $baseOffset = [int]$baseOffset
     Write-Host "[INFO] Resuming from offset $baseOffset"
 } else {
-    $baseOffset = 290   # 初始 offset
+    $baseOffset = 330
     Write-Host "[INFO] Starting from initial offset $baseOffset"
 }
 
