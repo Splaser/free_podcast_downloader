@@ -66,9 +66,9 @@ def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str]
     cmd = [
         "aria2c",
         "-i", list_file,
-        "-c",           # 断点续传
-        "-x", "16",     # 最大 16 线程
-        "-s", "16",     # 分段源数
+        "-c",          # 断点续传
+        "-x", "8",     # 最大 16 线程
+        "-s", "8",     # 分段源数
         "--max-tries=5",
         "--retry-wait=5",
         "-d", str(output_dir),
