@@ -5,6 +5,52 @@ from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC, COMM, ID3NoHeaderError
 
 
+def has_m4a_basic_tags(filename: str) -> bool:
+    """
+    检查 m4a 是否已有基础 metadata。
+    只检查 title / artist / album，不强制检查封面。
+    """
+    try:
+        audio = MP4(filename)
+
+        title = audio.get("\xa9nam")
+        artist = audio.get("\xa9ART")
+        album = audio.get("\xa9alb")
+
+        return bool(title and artist and album)
+
+    except Exception:
+        return False
+
+
+def has_mp3_basic_tags(filename: str) -> bool:
+    """
+    检查 mp3 是否已有基础 metadata。
+    只检查 title / artist / album，不强制检查封面。
+    """
+    try:
+        audio = EasyID3(filename)
+
+        title = audio.get("title")
+        artist = audio.get("artist")
+        album = audio.get("album")
+
+        return bool(title and artist and album)
+
+    except Exception:
+        return False
+
+def has_basic_tags(filename: str, ext: str) -> bool:
+    ext = ext.lower()
+
+    if ext in [".m4a", ".mp4"]:
+        return has_m4a_basic_tags(filename)
+
+    if ext == ".mp3":
+        return has_mp3_basic_tags(filename)
+
+    return False
+
 def _download_cover(cover_url: str, session=None) -> bytes | None:
     if not cover_url:
         return None

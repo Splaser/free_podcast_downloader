@@ -4,7 +4,7 @@ from pathlib import Path
 import requests
 
 from podcast_archiver.filename import sanitize_filename
-from podcast_archiver.tagging import tag_m4a, tag_mp3
+from podcast_archiver.tagging import tag_m4a, tag_mp3, has_basic_tags
 
 
 def download_file(url: str, output_path: Path, session=None):
@@ -55,17 +55,38 @@ def download_file(url: str, output_path: Path, session=None):
     print(f"[INFO] saved: {output_path}")
 
 
-def download_episode(episode, output_dir: str = "downloads", session=None, write_tag: bool = True):
+def download_episode(
+    episode,
+    output_dir: str = "downloads",
+    session=None,
+    write_tag: bool = True,
+    retag_existing: bool = False,
+):
     """
-    下载 parse_listen_notes_episode() 返回的 Episode。
+    下载 episode。
+
+    逻辑：
+    - 文件不存在：下载，然后写 tag
+    - 文件存在且已有基础 tag：默认直接跳过
+    - 文件存在但缺 tag：补 tag
+    - retag_existing=True：即使已有 tag，也强制重写
     """
     podcast_dir = sanitize_filename(episode.podcast_title)
     filename = sanitize_filename(episode.title) + episode.ext
 
     output_path = Path(output_dir) / podcast_dir / filename
 
-    if output_path.exists():
-        print(f"[INFO] file exists, skip download: {output_path}")
+    file_existed = output_path.exists()
+
+    if file_existed:
+        print(f"[INFO] file exists: {output_path}")
+
+        if write_tag and not retag_existing and has_basic_tags(str(output_path), episode.ext):
+            print("[INFO] basic tags exist, skip download and retag")
+            return output_path
+
+        print("[INFO] file exists but tag missing or retag requested")
+
     else:
         download_file(episode.audio_url, output_path, session=session)
 

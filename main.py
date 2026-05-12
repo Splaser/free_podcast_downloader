@@ -24,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--rss",
         help="Podcast RSS feed URL.",
     )
+    
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=1,
+        help="Max pages to fetch in Listen Notes list mode. Default: 1.",
+    )
 
     parser.add_argument(
         "--browser",
@@ -62,6 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="In RSS mode, download all episodes. Use carefully.",
     )
+
+    parser.add_argument(
+        "--retag-existing",
+        action="store_true",
+        help="Retag existing files even if basic metadata already exists.",
+    )
+
+    parser.add_argument("--channel-uuid", default=None)
+    parser.add_argument("--next-pub-date", type=int, default=None)
+    parser.add_argument("--prev-pub-date", type=int, default=None)
 
     return parser
 
