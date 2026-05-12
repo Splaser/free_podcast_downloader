@@ -12,8 +12,27 @@ def download_file(url: str, output_path: Path, session=None):
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with s.get(url, stream=True, timeout=60) as resp:
-        resp.raise_for_status()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) "
+            "Gecko/20100101 Firefox/150.0"
+        ),
+        "Accept": "audio/*,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "identity",
+        "Connection": "keep-alive",
+    }
+
+    with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
+        print(f"[INFO] audio GET status={resp.status_code}")
+        print(f"[INFO] audio final_url={resp.url}")
+        print(f"[INFO] audio content-type={resp.headers.get('content-type')}")
+
+        if resp.status_code >= 400:
+            preview = resp.content[:500].decode("utf-8", errors="replace")
+            print("[WARN] audio error preview:")
+            print(preview)
+            resp.raise_for_status()
 
         total = resp.headers.get("content-length")
         total = int(total) if total and total.isdigit() else None
