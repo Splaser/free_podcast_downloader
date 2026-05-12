@@ -4,7 +4,7 @@ from pathlib import Path
 import requests
 
 from podcast_archiver.filename import sanitize_filename
-from podcast_archiver.tagging import tag_m4a
+from podcast_archiver.tagging import tag_m4a, tag_mp3
 
 
 def download_file(url: str, output_path: Path, session=None):
@@ -79,6 +79,18 @@ def download_episode(episode, output_dir: str = "downloads", session=None, write
             cover_url=episode.cover_url,
             session=session,
         )
+
+    elif write_tag and episode.ext.lower() == ".mp3":
+        tag_mp3(
+            str(output_path),
+            title=episode.title,
+            artist=episode.author or episode.podcast_title,
+            album=episode.podcast_title,
+            description=episode.description,
+            cover_url=episode.cover_url,
+            session=session,
+        )
+
     elif write_tag:
         print(f"[WARN] tagging skipped for unsupported ext: {episode.ext}")
 

@@ -2,27 +2,34 @@
 import argparse
 import sys
 
-from podcast_archiver.session_utils import create_session
-from podcast_archiver.listen_notes import parse_listen_notes_episode
-from podcast_archiver.downloader import download_episode
+from podcast_archiver.cli_handlers import dispatch_args
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Download publicly available podcast episodes from Listen Notes."
+        description=(
+            "Download publicly available podcast episodes from "
+            "Listen Notes, WeChat articles, or RSS feeds."
+        )
     )
 
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+
+    source.add_argument(
         "--url",
-        required=True,
-        help="Listen Notes episode URL",
+        help="Episode/article URL. Supports Listen Notes episode URLs and WeChat article URLs.",
+    )
+
+    source.add_argument(
+        "--rss",
+        help="Podcast RSS feed URL.",
     )
 
     parser.add_argument(
         "--browser",
         choices=["firefox", "chrome"],
         default="firefox",
-        help="Browser to load cookies from. Default: firefox",
+        help="Browser to load cookies from for Listen Notes. Default: firefox",
     )
 
     parser.add_argument(
@@ -40,7 +47,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--list",
         action="store_true",
-        help="Only parse and print episode metadata, do not download",
+        help="Only parse and print metadata, do not download",
+    )
+
+    parser.add_argument(
+        "--latest",
+        type=int,
+        default=None,
+        help="In RSS mode, select latest n episodes.",
+    )
+
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="In RSS mode, download all episodes. Use carefully.",
     )
 
     return parser
@@ -51,32 +71,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        session = create_session(
-            browser=args.browser,
-            domain="listennotes.com",
-        )
-
-        episode = parse_listen_notes_episode(args.url, session)
-
-        print("title:", episode.title)
-        print("podcast:", episode.podcast_title)
-        print("author:", episode.author)
-        print("cover:", episode.cover_url)
-        print("audio:", episode.audio_url)
-        print("ext:", episode.ext)
-
-        if args.list:
-            return 0
-
-        output_path = download_episode(
-            episode,
-            output_dir=args.output,
-            session=session,
-            write_tag=not args.no_tag,
-        )
-
-        print("done:", output_path)
-        return 0
+        return dispatch_args(args)
 
     except KeyboardInterrupt:
         print("\n[WARN] interrupted by user")
