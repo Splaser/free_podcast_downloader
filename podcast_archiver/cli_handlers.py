@@ -23,7 +23,7 @@ from .listen_notes_list import (
     extract_listen_notes_list_context,
     fetch_more_episodes_from_listen_notes_api
 )
-from .typlog import probe_episode, download_typlog_episode
+from .typlog import download_typlog_episode
 
 
 
