@@ -1,24 +1,30 @@
 # podcast_archiver/cli_handlers.py
 from pathlib import Path
 from urllib.parse import urlparse
-
-from podcast_archiver.session_utils import create_session
-from podcast_archiver.wechat import parse_wechat_article
-from podcast_archiver.rss import (
+from .tagging import tag_m4a, tag_mp3
+from .session_utils import create_session
+from .wechat import parse_wechat_article
+from .rss import (
     parse_rss_feed,
     print_episodes,
     extract_original_url_from_proxy,
 )
-from podcast_archiver.downloader import download_episode, download_file
-from podcast_archiver.filename import sanitize_filename
+from .downloader import (
+    download_episode,
+    download_file,
+    download_files_aria2,
+    has_aria2,
+)
+from .filename import sanitize_filename
 
-from podcast_archiver.listen_notes import parse_listen_notes_episode
-from podcast_archiver.listen_notes_list import (
+from .listen_notes import parse_listen_notes_episode
+from .listen_notes_list import (
     is_listen_notes_podcast_page,
     extract_listen_notes_list_context,
-    fetch_more_episodes_from_listen_notes_api,
-    print_episode_links,
+    fetch_more_episodes_from_listen_notes_api
 )
+import tempfile
+
 
 
 def print_episode(episode) -> None:
@@ -152,6 +158,7 @@ def handle_url(url: str, args) -> int:
     print("[HINT] Currently supported URL hosts: listennotes.com, mp.weixin.qq.com")
     return 1
 
+
 def dispatch_args(args) -> int:
     """
     Main CLI dispatcher.
@@ -163,6 +170,7 @@ def dispatch_args(args) -> int:
         return handle_url(args.url, args)
 
     return 1
+
 
 def handle_listen_notes_list_url(url: str, args) -> int:
     session = create_session(
@@ -281,35 +289,64 @@ def handle_listen_notes_list_url(url: str, args) -> int:
 
         return 0
 
-    for absolute_index, (kind, value) in enumerate(selected_jobs, start=offset + 1):
-        print(f"[INFO] downloading episode {absolute_index}")
+    # 收集所有 URL 与 episode 对象，并生成 target path
+    urls = []
+    episode_map = {}  # audio_url -> episode
+    download_map = {}  # audio_url -> target Path
 
-        try:
-            if kind == "url":
-                episode_url = value
-                print("[INFO] episode url:", episode_url)
-                episode = parse_listen_notes_episode(episode_url, session)
-            else:
-                episode = value
-                print("[INFO] episode url:", episode.source_url)
+    for kind, value in selected_jobs:
+        if kind == "url":
+            episode = parse_listen_notes_episode(value, session)
+            urls.append(episode.audio_url)
+        else:
+            episode = value
+            urls.append(episode.audio_url)
+            episode_map[episode.audio_url] = episode
 
-            print_episode(episode)
+        target_path = Path(args.output) / sanitize_filename(episode.podcast_title) / (sanitize_filename(episode.title) + episode.ext)
+        download_map[episode.audio_url] = target_path
 
-            output_path = download_episode(
-                episode,
-                output_dir=args.output,
-                session=session,
-                write_tag=not args.no_tag,
-                retag_existing=args.retag_existing,
-            )
+    if has_aria2():
+        filenames = [str(download_map[url].relative_to(args.output)) for url in urls]
+        download_files_aria2(urls, Path(args.output), filenames=filenames)
+            
+    else:
+        print("[INFO] Aria2 not detected, using original single-download loop")
+        for url in urls:
+            ep = episode_map.get(url)
+            if ep:
+                download_episode(
+                    ep,
+                    output_dir=args.output,
+                    session=session,
+                    write_tag=not args.no_tag,
+                    retag_existing=args.retag_existing,
+                )
 
-            print("done:", output_path)
-
-        except Exception as e:
-            target = value if kind == "url" else (value.source_url or value.title)
-            print(f"[ERROR] failed episode: {target}")
-            print(f"[ERROR] {e}")
-            print()
-            continue
-
+    # 批量写 tag（只写，不再 download）
+    if not args.no_tag:
+        for audio_url, episode in episode_map.items():
+            target_path = download_map[audio_url]
+            if target_path.exists():
+                if episode.ext.lower() in [".m4a", ".mp4"]:
+                    tag_m4a(
+                        str(target_path),
+                        title=episode.title,
+                        artist=episode.author or episode.podcast_title,
+                        album=episode.podcast_title,
+                        description=episode.description,
+                        cover_url=episode.cover_url,
+                        session=session,
+                    )
+                elif episode.ext.lower() == ".mp3":
+                    tag_mp3(
+                        str(target_path),
+                        title=episode.title,
+                        artist=episode.author or episode.podcast_title,
+                        album=episode.podcast_title,
+                        description=episode.description,
+                        cover_url=episode.cover_url,
+                        session=session,
+                    )
+    
     return 0

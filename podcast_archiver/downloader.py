@@ -37,6 +37,48 @@ def download_file_aria2(url: str, output_path: Path):
     print(f"[INFO] saved: {output_path}")
 
 
+def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str] | None = None):
+    """
+    使用 aria2 批量下载所有 url，直接指定输出文件名，避免后续 rename。
+    
+    urls: List of download links
+    output_dir: 存储目录
+    filenames: List of target filenames（与 urls 对应），若为 None，则自动生成 ep_1, ep_2...
+    """
+    if not has_aria2():
+        raise RuntimeError("[ERROR] aria2 not found!")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 创建临时 txt 列表文件
+    import tempfile
+    with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as f:
+        for idx, url in enumerate(urls):
+            # 如果用户提供 filenames，就用 target name，否则用默认 ep_1, ep_2...
+            if filenames and idx < len(filenames):
+                out_name = filenames[idx]
+            else:
+                out_name = f"ep_{idx+1}{Path(url).suffix}"
+            # Aria2 list 文件里指定输出文件名
+            f.write(f"{url}\n  out={out_name}\n")
+        list_file = f.name
+
+    cmd = [
+        "aria2c",
+        "-i", list_file,
+        "-c",           # 断点续传
+        "-x", "16",     # 最大 16 线程
+        "-s", "16",     # 分段源数
+        "--max-tries=5",
+        "--retry-wait=5",
+        "-d", str(output_dir),
+    ]
+
+    print(f"[INFO] aria2 batch downloading {len(urls)} files to {output_dir}")
+    subprocess.run(cmd, check=True)
+    print(f"[INFO] aria2 batch download finished")
+
+
 def download_file(url: str, output_path: Path, session=None, chunk_size=1024*256):
     """
     普通下载文件（requests fallback），断点续传由 download_file_resume 或者文件大小控制
@@ -86,11 +128,13 @@ def download_file(url: str, output_path: Path, session=None, chunk_size=1024*256
 
 
 def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1024*256):
-    """
-    下载单个文件，支持断点续传。
-    优先使用 aria2（多线程 + 断点续传），无 aria2 则 fallback requests。
-    """
-    # 优先 aria2
+    key = str(output_path)
+    downloaded = _downloaded_progress.get(key, 0)
+    if output_path.exists():
+        downloaded = max(downloaded, output_path.stat().st_size)
+    _downloaded_progress[key] = downloaded
+
+    # 优先 aria2 下载
     if has_aria2():
         try:
             download_file_aria2(url, output_path)
@@ -98,6 +142,7 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
         except Exception as e:
             print(f"[WARN] aria2 failed ({e}), fallback to requests download")
 
+    # requests fallback + chunked + retry
     s = session or requests.Session()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -109,13 +154,6 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
         "Connection": "keep-alive",
     }
 
-    key = str(output_path)
-    downloaded = _downloaded_progress.get(key, 0)
-    if output_path.exists():
-        downloaded = max(downloaded, output_path.stat().st_size)
-    _downloaded_progress[key] = downloaded
-
-    # 增加简单重试机制
     for attempt in range(3):
         try:
             with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
@@ -124,28 +162,26 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
 
                 total = resp.headers.get("content-length")
                 if total and total.isdigit():
-                    total = int(total) + \
-                        downloaded if downloaded else int(total)
+                    total = int(total) + downloaded if downloaded else int(total)
                 else:
                     total = None
 
                 mode = "ab" if downloaded else "wb"
                 with open(output_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=chunk_size):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total:
-                            percent = min(downloaded * 100 / total, 100)
-                            print(f"\r[INFO] downloading... {percent:.1f}%", end="", flush=True)
-                print()
-                print(f"[INFO] saved: {output_path}")
-                return  # 下载成功，退出重试
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            _downloaded_progress[key] = downloaded
+                            if total:
+                                percent = min(downloaded * 100 / total, 100)
+                                print(f"\r[INFO] downloading... {percent:.1f}%", end="", flush=True)
+            print()
+            print(f"[INFO] saved: {output_path}")
+            return
         except requests.exceptions.RequestException as e:
             print(f"[WARN] download attempt {attempt+1}/3 failed: {e}")
             if attempt < 2:
-                print("[INFO] retrying in 3s...")
                 import time
                 time.sleep(3)
             else:
