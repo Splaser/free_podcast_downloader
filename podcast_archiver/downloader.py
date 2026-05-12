@@ -54,6 +54,43 @@ def download_file(url: str, output_path: Path, session=None):
     print()
     print(f"[INFO] saved: {output_path}")
 
+def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1024*256):
+    s = session or requests.Session()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 ...",
+        "Accept": "audio/*,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "identity",
+        "Connection": "keep-alive",
+    }
+
+    downloaded = output_path.stat().st_size if output_path.exists() else 0
+    if downloaded > 0:
+        headers["Range"] = f"bytes={downloaded}-"
+        print(f"[INFO] resume download from {downloaded} bytes")
+
+    with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
+        if resp.status_code not in [200, 206]:
+            resp.raise_for_status()
+
+        total = resp.headers.get("content-length")
+        total = int(total) + downloaded if total else None
+
+        mode = "ab" if downloaded else "wb"
+        with open(output_path, mode) as f:
+            for chunk in resp.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    percent = downloaded * 100 / total
+                    print(f"\r[INFO] downloading... {percent:.1f}%", end="")
+    print()
+    print(f"[INFO] saved: {output_path}")
+
 
 def download_episode(
     episode,
@@ -88,7 +125,10 @@ def download_episode(
         print("[INFO] file exists but tag missing or retag requested")
 
     else:
-        download_file(episode.audio_url, output_path, session=session)
+        if file_existed:
+            download_file_resume(episode.audio_url, output_path, session=session)
+        else:
+            download_file(episode.audio_url, output_path, session=session)
 
     if write_tag and episode.ext.lower() in [".m4a", ".mp4"]:
         tag_m4a(
