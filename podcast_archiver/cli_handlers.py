@@ -182,24 +182,49 @@ def handle_listen_notes_list_url(url: str, args) -> int:
     print(f"[INFO] prev_pub_date: {prev_pub_date}")
     print(f"[INFO] next_pub_date: {next_pub_date}")
 
-    # 先处理首屏 links，保持原逻辑
     first_page_links = links
-
-    # 如果用户要的数量超过首屏，且 max_pages > 1，则调用 API 补后续
     api_episodes = []
 
-    wanted = args.latest if args.latest is not None else None
+    offset = max(args.offset or 0, 0)
+    latest = args.latest
+
+    page_size = len(first_page_links) or 10
+
+    if latest is not None:
+        wanted_total = offset + latest
+    elif args.all:
+        wanted_total = None
+    else:
+        wanted_total = len(first_page_links)
+
+    if args.max_pages is not None:
+        max_pages = max(args.max_pages, 1)
+    elif wanted_total is not None:
+        max_pages = max(1, (wanted_total + page_size - 1) // page_size)
+    else:
+        # --all 没有显式 max-pages 时，默认只抓首屏，避免误全量狂拉
+        max_pages = 1
+
+    print(f"[INFO] page_size={page_size}")
+    print(f"[INFO] wanted_total={wanted_total}")
+    print(f"[INFO] max_pages={max_pages}")
 
     need_more = (
         channel_uuid
         and prev_pub_date
         and next_pub_date
-        and args.max_pages > 1
-        and (wanted is None or wanted > len(first_page_links))
+        and max_pages > 1
+        and (
+            wanted_total is None
+            or wanted_total > len(first_page_links)
+        )
     )
 
     if need_more:
-        extra_pages = args.max_pages - 1
+        extra_pages = max_pages - 1
+
+        print(f"[INFO] load-more enabled: max_pages={max_pages}, extra_pages={extra_pages}")
+
         api_episodes = fetch_more_episodes_from_listen_notes_api(
             channel_uuid=channel_uuid,
             session=session,
@@ -210,64 +235,64 @@ def handle_listen_notes_list_url(url: str, args) -> int:
         )
 
     if (
-        args.max_pages > 1
-        and wanted is not None
-        and wanted > len(first_page_links)
+        max_pages > 1
+        and wanted_total is not None
+        and wanted_total > len(first_page_links)
         and not need_more
     ):
         print("[WARN] Load-more requested but context is incomplete.")
-        print(f"[WARN] wanted={wanted}, first_page_links={len(first_page_links)}")
+        print(f"[WARN] wanted_total={wanted_total}, first_page_links={len(first_page_links)}")
         print(f"[WARN] channel_uuid={channel_uuid or '(not found)'}")
         print(f"[WARN] prev_pub_date={prev_pub_date}")
         print(f"[WARN] next_pub_date={next_pub_date}")
         print("[HINT] Auto context extraction failed. Check debug_listennotes_context.html or pass override args.")
 
-    # --list 模式：
-    # 首屏显示 URL，API 页显示 source_url
+    jobs = []
+
+    for link in first_page_links:
+        jobs.append(("url", link))
+
+    for episode in api_episodes:
+        jobs.append(("api", episode))
+
+    if args.all:
+        selected_jobs = jobs[offset:]
+    elif latest is not None:
+        selected_jobs = jobs[offset: offset + latest]
+    else:
+        print("[ERROR] Listen Notes list mode requires --latest n or --all")
+        print("[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30")
+        return 1
+
+    print(f"[INFO] total collected episodes: {len(jobs)}")
+    print(f"[INFO] offset={offset}")
+    print(f"[INFO] selected episodes: {len(selected_jobs)}")
+
+    if latest is not None and len(selected_jobs) < latest:
+        print(f"[WARN] selected episodes less than requested: selected={len(selected_jobs)}, requested={latest}")
+        print("[HINT] Increase --max-pages or check load-more context.")
+
     if args.list:
-        combined = []
-
-        for link in first_page_links:
-            combined.append(("url", link))
-
-        for episode in api_episodes:
-            combined.append(("api", episode.source_url or episode.title))
-
-        if args.latest is not None:
-            combined = combined[: args.latest]
-
-        print(f"[INFO] extracted episodes: {len(combined)}")
-
-        for index, (_, value) in enumerate(combined, start=1):
-            print(f"{index}. {value}")
+        for absolute_index, (kind, value) in enumerate(selected_jobs, start=offset + 1):
+            if kind == "url":
+                print(f"{absolute_index}. {value}")
+            else:
+                print(f"{absolute_index}. {value.source_url or value.title}")
 
         return 0
 
-    if not args.all and args.latest is None:
-        print("[ERROR] Listen Notes list mode requires --latest n or --all")
-        print("[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30 --max-pages 3")
-        return 1
-
-    # 下载阶段：
-    # 首屏 links 走 parse_listen_notes_episode
-    # API episodes 直接 download_episode
-    if args.latest is not None:
-        remaining = args.latest
-    else:
-        remaining = None
-
-    downloaded_count = 0
-
-    selected_links = first_page_links
-    if remaining is not None:
-        selected_links = selected_links[:remaining]
-
-    for index, episode_url in enumerate(selected_links, start=1):
-        print(f"[INFO] downloading episode {downloaded_count + 1}")
-        print("[INFO] episode url:", episode_url)
+    for absolute_index, (kind, value) in enumerate(selected_jobs, start=offset + 1):
+        print(f"[INFO] downloading episode {absolute_index}")
 
         try:
-            episode = parse_listen_notes_episode(episode_url, session)
+            if kind == "url":
+                episode_url = value
+                print("[INFO] episode url:", episode_url)
+                episode = parse_listen_notes_episode(episode_url, session)
+            else:
+                episode = value
+                print("[INFO] episode url:", episode.source_url)
+
             print_episode(episode)
 
             output_path = download_episode(
@@ -279,40 +304,10 @@ def handle_listen_notes_list_url(url: str, args) -> int:
             )
 
             print("done:", output_path)
-            downloaded_count += 1
 
         except Exception as e:
-            print(f"[ERROR] failed episode: {episode_url}")
-            print(f"[ERROR] {e}")
-            print()
-            continue
-
-    if remaining is not None:
-        remaining -= downloaded_count
-
-    selected_api_episodes = api_episodes
-    if remaining is not None:
-        selected_api_episodes = selected_api_episodes[:remaining]
-
-    for episode in selected_api_episodes:
-        print(f"[INFO] downloading episode {downloaded_count + 1}")
-        print("[INFO] episode url:", episode.source_url)
-        print_episode(episode)
-
-        try:
-            output_path = download_episode(
-                episode,
-                output_dir=args.output,
-                session=session,
-                write_tag=not args.no_tag,
-                retag_existing=args.retag_existing,
-            )
-
-            print("done:", output_path)
-            downloaded_count += 1
-
-        except Exception as e:
-            print(f"[ERROR] failed episode: {episode.source_url or episode.title}")
+            target = value if kind == "url" else (value.source_url or value.title)
+            print(f"[ERROR] failed episode: {target}")
             print(f"[ERROR] {e}")
             print()
             continue

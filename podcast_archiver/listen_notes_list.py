@@ -283,8 +283,8 @@ def _fetch_listen_notes_api_page(
     if not raw:
         raise RuntimeError("Listen Notes API returned empty response body")
 
-    preview = raw[:500].decode("utf-8", errors="replace").replace("\n", "\\n")
-    print(f"[INFO] api response preview={preview}")
+    # preview = raw[:500].decode("utf-8", errors="replace").replace("\n", "\\n")
+    # print(f"[INFO] api response preview={preview}")
 
     try:
         return json.loads(raw.decode("utf-8"))

@@ -28,10 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-pages",
         type=int,
-        default=1,
-        help="Max pages to fetch in Listen Notes list mode. Default: 1.",
+        default=None,
+        help="Max pages to fetch in Listen Notes list mode. Auto calculated when omitted.",
     )
-
     parser.add_argument(
         "--browser",
         choices=["firefox", "chrome"],
@@ -55,6 +54,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--list",
         action="store_true",
         help="Only parse and print metadata, do not download",
+    )
+
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Skip first n episodes before applying --latest. Useful for batch archive.",
     )
 
     parser.add_argument(
