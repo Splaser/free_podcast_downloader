@@ -26,8 +26,8 @@ def download_file_aria2(url: str, output_path: Path):
     cmd = [
         "aria2c",
         "-c",  # 断点续传
-        "-x", "16",  # 最大 16 线程
-        "-s", "16",  # 分段源数
+        "-x", "4",  # 最大 16 线程
+        "-s", "4",  # 分段源数
         "-o", str(output_path.name),
         "-d", str(output_path.parent),
         url
@@ -67,8 +67,9 @@ def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str]
         "aria2c",
         "-i", list_file,
         "-c",          # 断点续传
-        "-x", "8",     # 最大 16 线程
-        "-s", "8",     # 分段源数
+        "-x", "2",     # 最大 16 线程
+        "-s", "2",     # 分段源数
+        "--min-split-size=10M",
         "--max-tries=5",
         "--retry-wait=5",
         "-d", str(output_dir),
