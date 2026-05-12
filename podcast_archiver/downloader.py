@@ -5,91 +5,151 @@ import requests
 
 from podcast_archiver.filename import sanitize_filename
 from podcast_archiver.tagging import tag_m4a, tag_mp3, has_basic_tags
+import subprocess
 
 
-def download_file(url: str, output_path: Path, session=None):
+# key = str(output_path)，value = 已下载字节数
+_downloaded_progress = {}
+
+
+def has_aria2():
+    try:
+        subprocess.run(["aria2c", "-v"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def download_file_aria2(url: str, output_path: Path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "aria2c",
+        "-c",  # 断点续传
+        "-x", "16",  # 最大 16 线程
+        "-s", "16",  # 分段源数
+        "-o", str(output_path.name),
+        "-d", str(output_path.parent),
+        url
+    ]
+    print(f"[INFO] aria2 downloading {url}")
+    subprocess.run(cmd, check=True)
+    print(f"[INFO] saved: {output_path}")
+
+
+def download_file(url: str, output_path: Path, session=None, chunk_size=1024*256):
+    """
+    普通下载文件（requests fallback），断点续传由 download_file_resume 或者文件大小控制
+    """
     s = session or requests.Session()
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) "
-            "Gecko/20100101 Firefox/150.0"
-        ),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "Accept": "audio/*,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "identity",
         "Connection": "keep-alive",
     }
 
-    with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
-        print(f"[INFO] audio GET status={resp.status_code}")
-        print(f"[INFO] audio final_url={resp.url}")
-        print(f"[INFO] audio content-type={resp.headers.get('content-type')}")
+    downloaded = _downloaded_progress.get(str(output_path), 0)
+    if output_path.exists():
+        downloaded = max(downloaded, output_path.stat().st_size)
+    _downloaded_progress[str(output_path)] = downloaded
 
-        if resp.status_code >= 400:
-            preview = resp.content[:500].decode("utf-8", errors="replace")
-            print("[WARN] audio error preview:")
-            print(preview)
-            resp.raise_for_status()
+    try:
+        with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
+            if resp.status_code not in [200, 206]:
+                resp.raise_for_status()
 
-        total = resp.headers.get("content-length")
-        total = int(total) if total and total.isdigit() else None
+            total = resp.headers.get("content-length")
+            if total and total.isdigit():
+                total = int(total) + downloaded if downloaded else int(total)
+            else:
+                total = None
 
-        downloaded = 0
+            mode = "ab" if downloaded else "wb"
+            with open(output_path, mode) as f:
+                for chunk in resp.iter_content(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    _downloaded_progress[str(output_path)] = downloaded
+                    if total:
+                        percent = min(downloaded * 100 / total, 100)
+                        print(f"\r[INFO] downloading... {percent:.1f}%", end="", flush=True)
+        print()
+        print(f"[INFO] saved: {output_path}")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"[ERROR] Failed to download file via requests: {url} | {e}")
 
-        with open(output_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1024 * 256):
-                if not chunk:
-                    continue
-
-                f.write(chunk)
-                downloaded += len(chunk)
-
-                if total:
-                    percent = downloaded * 100 / total
-                    print(f"\r[INFO] downloading... {percent:.1f}%", end="")
-
-    print()
-    print(f"[INFO] saved: {output_path}")
 
 def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1024*256):
+    """
+    下载单个文件，支持断点续传。
+    优先使用 aria2（多线程 + 断点续传），无 aria2 则 fallback requests。
+    """
+    # 优先 aria2
+    if has_aria2():
+        try:
+            download_file_aria2(url, output_path)
+            return
+        except Exception as e:
+            print(f"[WARN] aria2 failed ({e}), fallback to requests download")
+
     s = session or requests.Session()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     headers = {
-        "User-Agent": "Mozilla/5.0 ...",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "Accept": "audio/*,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "identity",
         "Connection": "keep-alive",
     }
 
-    downloaded = output_path.stat().st_size if output_path.exists() else 0
-    if downloaded > 0:
-        headers["Range"] = f"bytes={downloaded}-"
-        print(f"[INFO] resume download from {downloaded} bytes")
+    key = str(output_path)
+    downloaded = _downloaded_progress.get(key, 0)
+    if output_path.exists():
+        downloaded = max(downloaded, output_path.stat().st_size)
+    _downloaded_progress[key] = downloaded
 
-    with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
-        if resp.status_code not in [200, 206]:
-            resp.raise_for_status()
+    # 增加简单重试机制
+    for attempt in range(3):
+        try:
+            with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
+                if resp.status_code not in [200, 206]:
+                    resp.raise_for_status()
 
-        total = resp.headers.get("content-length")
-        total = int(total) + downloaded if total else None
+                total = resp.headers.get("content-length")
+                if total and total.isdigit():
+                    total = int(total) + \
+                        downloaded if downloaded else int(total)
+                else:
+                    total = None
 
-        mode = "ab" if downloaded else "wb"
-        with open(output_path, mode) as f:
-            for chunk in resp.iter_content(chunk_size=chunk_size):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    percent = downloaded * 100 / total
-                    print(f"\r[INFO] downloading... {percent:.1f}%", end="")
-    print()
-    print(f"[INFO] saved: {output_path}")
+                mode = "ab" if downloaded else "wb"
+                with open(output_path, mode) as f:
+                    for chunk in resp.iter_content(chunk_size=chunk_size):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            percent = min(downloaded * 100 / total, 100)
+                            print(f"\r[INFO] downloading... {percent:.1f}%", end="", flush=True)
+                print()
+                print(f"[INFO] saved: {output_path}")
+                return  # 下载成功，退出重试
+        except requests.exceptions.RequestException as e:
+            print(f"[WARN] download attempt {attempt+1}/3 failed: {e}")
+            if attempt < 2:
+                print("[INFO] retrying in 3s...")
+                import time
+                time.sleep(3)
+            else:
+                raise RuntimeError(f"[ERROR] Failed to download after 3 attempts: {url}")
 
 
 def download_episode(
@@ -115,20 +175,10 @@ def download_episode(
 
     file_existed = output_path.exists()
 
-    if file_existed:
-        print(f"[INFO] file exists: {output_path}")
-
-        if write_tag and not retag_existing and has_basic_tags(str(output_path), episode.ext):
-            print("[INFO] basic tags exist, skip download and retag")
-            return output_path
-
-        print("[INFO] file exists but tag missing or retag requested")
-
+    if file_existed and write_tag and not retag_existing and has_basic_tags(str(output_path), episode.ext):
+        print("[INFO] skip download and retag")
     else:
-        if file_existed:
-            download_file_resume(episode.audio_url, output_path, session=session)
-        else:
-            download_file(episode.audio_url, output_path, session=session)
+        download_file_resume(episode.audio_url, output_path, session=session)
 
     if write_tag and episode.ext.lower() in [".m4a", ".mp4"]:
         tag_m4a(
