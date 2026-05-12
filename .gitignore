@@ -222,6 +222,7 @@ __marimo__/
 *.m4a
 
 *.html
+*.txt
 *.json
 
 downloads/
