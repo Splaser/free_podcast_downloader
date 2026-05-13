@@ -95,7 +95,7 @@ def handle_rss(rss_url: str, args) -> int:
     session = create_session(browser=None)
 
     episodes = parse_rss_feed(rss_url, session=session)
-    
+    print(f"[INFO] parsed total RSS episodes: {len(episodes)}")
 
     offset = max(args.offset or 0, 0)
 
