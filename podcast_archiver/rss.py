@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Iterable
 import requests
 import feedparser
@@ -74,6 +75,17 @@ def _guess_ext_from_url_or_type(url: str, mime_type: str = "") -> str:
 
     return ".mp3"
 
+def _entry_timestamp(entry) -> int:
+    parsed_time = (
+        entry.get("published_parsed")
+        or entry.get("updated_parsed")
+        or entry.get("created_parsed")
+    )
+
+    if not parsed_time:
+        return 0
+
+    return int(time.mktime(parsed_time))
 
 def _get_feed_image(feed) -> str:
     """
@@ -230,7 +242,7 @@ def parse_rss_feed(rss_url: str, session=None) -> list[Episode]:
 
     feed_cover = _get_feed_image(feed)
 
-    episodes: list[Episode] = []
+    episodes_with_time: list[tuple[int, Episode]] = []
 
     for entry in entries:
         audio_url, mime_type = _find_audio_enclosure(entry)
@@ -260,9 +272,12 @@ def parse_rss_feed(rss_url: str, session=None) -> list[Episode]:
             ext=_guess_ext_from_url_or_type(audio_url, mime_type),
         )
 
-        episodes.append(episode)
+        timestamp = _entry_timestamp(entry)
+        episodes_with_time.append((timestamp, episode))
 
-    return episodes
+    episodes_with_time.sort(key=lambda item: item[0], reverse=True)
+
+    return [episode for _, episode in episodes_with_time]
 
 
 def print_episodes(episodes: Iterable[Episode], limit: int | None = None):

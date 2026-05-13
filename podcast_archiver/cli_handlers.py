@@ -96,6 +96,7 @@ def handle_rss(rss_url: str, args) -> int:
 
     episodes = parse_rss_feed(rss_url, session=session)
     
+
     offset = max(args.offset or 0, 0)
 
     if args.all:
