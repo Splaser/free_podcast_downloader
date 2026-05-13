@@ -2,7 +2,7 @@
 from pathlib import Path
 
 import requests
-
+import tempfile
 from podcast_archiver.filename import sanitize_filename
 from podcast_archiver.tagging import tag_m4a, tag_mp3, has_basic_tags
 import subprocess
@@ -26,11 +26,13 @@ def download_file_aria2(url: str, output_path: Path):
     cmd = [
         "aria2c",
         "-c",  # 断点续传
-        "-x", "4",  # 最大 16 线程
-        "-s", "4",  # 分段源数
+        "--auto-file-renaming=false",
+        "--allow-overwrite=true",
+        "-x", "4",
+        "-s", "4",
         "-o", str(output_path.name),
         "-d", str(output_path.parent),
-        url
+        url,
     ]
     print(f"[INFO] aria2 downloading {url}")
     subprocess.run(cmd, check=True)
@@ -50,8 +52,6 @@ def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str]
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 创建临时 txt 列表文件
-    import tempfile
     with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as f:
         for idx, url in enumerate(urls):
             # 如果用户提供 filenames，就用 target name，否则用默认 ep_1, ep_2...
@@ -66,9 +66,11 @@ def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str]
     cmd = [
         "aria2c",
         "-i", list_file,
-        "-c",          # 断点续传
-        "-x", "2",     # 最大 16 线程
-        "-s", "2",     # 分段源数
+        "-c",
+        "--auto-file-renaming=false",
+        "--allow-overwrite=true",
+        "-x", "2",
+        "-s", "2",
         "--min-split-size=10M",
         "--max-tries=5",
         "--retry-wait=5",
@@ -155,19 +157,32 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
         "Connection": "keep-alive",
     }
 
+    if downloaded > 0:
+        headers["Range"] = f"bytes={downloaded}-"
+
     for attempt in range(3):
         try:
             with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
                 if resp.status_code not in [200, 206]:
                     resp.raise_for_status()
 
+                # 如果本地已有部分文件，但服务端没有按 Range 返回 206，
+                # 说明它准备从头返回完整文件。此时不能 ab 追加，否则文件会损坏。
+                if downloaded > 0 and resp.status_code == 200:
+                    print("[WARN] server ignored Range request, restarting download from 0")
+                    downloaded = 0
+                    _downloaded_progress[key] = 0
+                    mode = "wb"
+                else:
+                    mode = "ab" if downloaded else "wb"
+
                 total = resp.headers.get("content-length")
+
                 if total and total.isdigit():
                     total = int(total) + downloaded if downloaded else int(total)
                 else:
                     total = None
-
-                mode = "ab" if downloaded else "wb"
+                    
                 with open(output_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=chunk_size):
                         if chunk:
@@ -212,8 +227,16 @@ def download_episode(
 
     file_existed = output_path.exists()
 
-    if file_existed and write_tag and not retag_existing and has_basic_tags(str(output_path), episode.ext):
-        print("[INFO] skip download and retag")
+    if file_existed:
+        if write_tag:
+            if not retag_existing and has_basic_tags(str(output_path), episode.ext):
+                print("[INFO] file exists and basic tags exist, skip download and retag")
+                return output_path
+            else:
+                print("[INFO] file exists, skip download and write/refresh tags")
+        else:
+            print("[INFO] file exists, skip download")
+            return output_path
     else:
         download_file_resume(episode.audio_url, output_path, session=session)
 

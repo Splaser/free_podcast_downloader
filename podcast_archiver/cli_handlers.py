@@ -95,10 +95,14 @@ def handle_rss(rss_url: str, args) -> int:
     session = create_session(browser=None)
 
     episodes = parse_rss_feed(rss_url, session=session)
+    
+    offset = max(args.offset or 0, 0)
 
-    if args.latest is not None:
-        episodes = episodes[: args.latest]
-
+    if args.all:
+        episodes = episodes[offset:]
+    elif args.latest is not None:
+        episodes = episodes[offset: offset + args.latest]
+    
     if args.list:
         print(f"[INFO] selected episodes: {len(episodes)}")
         print_episodes(episodes)
@@ -336,19 +340,41 @@ def handle_listen_notes_list_url(url: str, args) -> int:
     for kind, value in selected_jobs:
         if kind == "url":
             episode = parse_listen_notes_episode(value, session)
-            urls.append(episode.audio_url)
         else:
             episode = value
-            urls.append(episode.audio_url)
-            episode_map[episode.audio_url] = episode
 
-        target_path = Path(args.output) / sanitize_filename(episode.podcast_title) / (sanitize_filename(episode.title) + episode.ext)
+        urls.append(episode.audio_url)
+        episode_map[episode.audio_url] = episode
+
+        target_path = (
+            Path(args.output)
+            / sanitize_filename(episode.podcast_title)
+            / (sanitize_filename(episode.title) + episode.ext)
+        )
         download_map[episode.audio_url] = target_path
 
     if has_aria2():
-        filenames = [str(download_map[url].relative_to(args.output)) for url in urls]
-        download_files_aria2(urls, Path(args.output), filenames=filenames)
-            
+        pending_urls = []
+        pending_filenames = []
+
+        for url in urls:
+            target_path = download_map[url]
+
+            if target_path.exists():
+                print(f"[INFO] skip existing file before aria2: {target_path}")
+                continue
+
+            pending_urls.append(url)
+            pending_filenames.append(str(target_path.relative_to(Path(args.output))))
+
+        if pending_urls:
+            download_files_aria2(
+                pending_urls,
+                Path(args.output),
+                filenames=pending_filenames,
+            )
+        else:
+            print("[INFO] no new files to download")
     else:
         print("[INFO] Aria2 not detected, using original single-download loop")
         for url in urls:
@@ -361,7 +387,7 @@ def handle_listen_notes_list_url(url: str, args) -> int:
                     write_tag=not args.no_tag,
                     retag_existing=args.retag_existing,
                 )
-
+    
     # 批量写 tag（只写，不再 download）
     if not args.no_tag:
         for audio_url, episode in episode_map.items():

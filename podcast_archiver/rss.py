@@ -256,7 +256,7 @@ def parse_rss_feed(rss_url: str, session=None) -> list[Episode]:
             description=_clean_html_text(description),
             audio_url=audio_url,
             cover_url=cover_url,
-            source_url=rss_url,
+            source_url=entry.get("link") or rss_url,
             ext=_guess_ext_from_url_or_type(audio_url, mime_type),
         )
 
