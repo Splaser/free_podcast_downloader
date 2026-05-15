@@ -25,7 +25,7 @@ cd free_podcast_downloader
 pip install -r requirements.txt
 ```
 
-可选安装 `aria2c`。如果系统检测到 aria2，下载时会自动使用；没有也可以正常用 Python requests 下载。
+可选安装 `aria2c`。如果系统检测到 aria2，下载时会优先使用；没有也可以正常用 Python requests 下载。
 
 ---
 
@@ -68,6 +68,10 @@ python main.py --url "https://siji.typlog.io/feed.xml" --all
 ```
 
 RSS 会自动识别，不一定要单独使用 `--rss`。
+
+如果系统安装了 aria2，RSS 批量下载会优先走 aria2 batch。下载完成后，程序会统一写入 metadata。
+
+如果中途 `Ctrl+C` 停止任务，可以直接重跑同一条命令。已存在的文件会跳过下载；缺少 tag 或封面的文件可以继续补写。
 
 ### 爱发电
 
@@ -145,6 +149,7 @@ python main.py --url "https://mp.weixin.qq.com/s/xxxx"
 | 参数 | 作用 |
 | --- | --- |
 | `--url URL` | 统一 URL 入口 |
+| `--rss URL` | 兼容旧用法，直接指定 RSS feed |
 | `--list` | 只解析，不下载 |
 | `--latest n` | 取最新 n 条 |
 | `--offset n` | 跳过前 n 条 |
@@ -153,6 +158,7 @@ python main.py --url "https://mp.weixin.qq.com/s/xxxx"
 | `--browser firefox/chrome` | 读取指定浏览器 cookie |
 | `--no-tag` | 只下载，不写 metadata |
 | `--retag-existing` | 文件已存在时重新写 metadata |
+| `--fix-cover` | 只给缺少内嵌封面的已存在文件补 cover |
 
 ---
 
@@ -189,6 +195,22 @@ downloads/某爱发电专辑/第001期 xxxx.mp3
 python main.py --url "URL" --retag-existing
 ```
 
+如果只想补缺失封面，可以使用：
+
+```shell
+python main.py --url "URL" --fix-cover
+```
+
+`--fix-cover` 会检查已存在文件是否带有内嵌封面；已有封面的文件会跳过，缺少封面的文件会尝试补写。
+
+封面处理顺序：
+
+1. 优先使用 RSS / API 提供的远程封面；
+2. 如果远程封面失效或返回 403，尝试从同目录、同标题前缀的已有文件中复用封面；
+3. 如果仍然找不到，则只保留基础 metadata，不阻断任务。
+
+这对一些旧 RSS 中已经失效的封面链接比较有用。
+
 ---
 
 ## 简单排错
@@ -209,6 +231,12 @@ python main.py --url "URL" --list
 Listen Notes 403 时，先在浏览器里打开页面，通过 Cloudflare 检查后再运行。
 
 RSS 一般不需要翻页，工具会一次拉取 feed 内容，然后在本地做 `--latest / --offset / --all` 切片。
+
+如果 RSS 全量下载中途停止，可以重跑同一条命令。已下载文件会跳过，未完成文件会继续处理。对于已下载但缺少封面的文件，可以使用：
+
+```shell
+python main.py --url "RSS_URL" --all --fix-cover
+```
 
 ---
 
