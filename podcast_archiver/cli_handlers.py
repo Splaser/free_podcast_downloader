@@ -1,5 +1,7 @@
 # podcast_archiver/cli_handlers.py
 from pathlib import Path
+import re
+
 from urllib.parse import urlparse
 from .tagging import tag_m4a, tag_mp3
 from .session_utils import create_session
@@ -21,10 +23,108 @@ from .listen_notes import parse_listen_notes_episode
 from .listen_notes_list import (
     is_listen_notes_podcast_page,
     extract_listen_notes_list_context,
-    fetch_more_episodes_from_listen_notes_api
+    fetch_more_episodes_from_listen_notes_api,
 )
 from .typlog import download_typlog_episode
+from .afdian import (
+    is_afdian_url,
+    parse_input_url as parse_afdian_input_url,
+    get_album_episodes,
+    get_single_post_episode,
+    download_afdian_episodes,
+    print_afdian_episode,
+)
 
+
+def _get_arg(args, name: str, default=None):
+    return getattr(args, name, default)
+
+
+def handle_afdian_url(url: str, args) -> int:
+    """
+    爱发电入口：支持 /album/{album_id} 和 /p/{post_id}。
+
+    - album：默认全量归档；传 --latest n 时只取最新 n 条；支持 --offset。
+    - post：单条下载；如果误传 --latest，会忽略。
+    """
+    session = create_session(
+        browser=_get_arg(args, "browser", "firefox") or "firefox",
+        domain="ifdian.net",
+    )
+
+    kind, resource_id = parse_afdian_input_url(url)
+
+    output_dir = _get_arg(args, "output", "downloads")
+    offset = max(_get_arg(args, "offset", 0) or 0, 0)
+    latest = _get_arg(args, "latest", None)
+
+    if kind == "album":
+        if latest is not None:
+            print(f"[INFO] Afdian album latest={latest}, offset={offset}")
+            episodes = get_album_episodes(
+                resource_id,
+                session=session,
+                latest=latest,
+                offset=offset,
+            )
+        else:
+            print(f"[INFO] Afdian album full archive, offset={offset}")
+            episodes = get_album_episodes(
+                resource_id,
+                session=session,
+                latest=None,
+                offset=offset,
+            )
+
+        print(f"[INFO] selected episodes: {len(episodes)}")
+
+        if _get_arg(args, "list", False):
+            for index, episode in enumerate(episodes, start=offset + 1):
+                print_afdian_episode(episode, index=index)
+            return 0
+
+        download_afdian_episodes(
+            episodes,
+            output_dir=output_dir,
+            session=session,
+            write_tag=not _get_arg(args, "no_tag", False),
+            retag_existing=_get_arg(args, "retag_existing", False),
+        )
+        return 0
+
+    if kind == "post":
+        if latest is not None:
+            print("[WARN] /p/ 单条资源不支持 --latest 参数，已忽略")
+
+        episode = get_single_post_episode(resource_id, session=session)
+        if episode is None:
+            print("[ERROR] this Afdian post has no audio")
+            return 1
+
+        if _get_arg(args, "list", False):
+            print_afdian_episode(episode)
+            return 0
+
+        download_afdian_episodes(
+            [episode],
+            output_dir=output_dir,
+            session=session,
+            write_tag=not _get_arg(args, "no_tag", False),
+            retag_existing=_get_arg(args, "retag_existing", False),
+            sleep_time=0,
+        )
+        return 0
+
+    print(f"[ERROR] unsupported Afdian resource kind: {kind}")
+    return 1
+
+
+def handle_afdian_id(album_id: str, args) -> int:
+    """
+    兼容旧项目 --id：默认视为 album_id。
+    """
+    url = f"https://ifdian.net/album/{album_id}"
+    return handle_afdian_url(url, args)
 
 
 def print_episode(episode) -> None:
@@ -102,8 +202,8 @@ def handle_rss(rss_url: str, args) -> int:
     if args.all:
         episodes = episodes[offset:]
     elif args.latest is not None:
-        episodes = episodes[offset: offset + args.latest]
-    
+        episodes = episodes[offset : offset + args.latest]
+
     if args.list:
         print(f"[INFO] selected episodes: {len(episodes)}")
         print_episodes(episodes)
@@ -147,8 +247,64 @@ def handle_rss(rss_url: str, args) -> int:
     return 0
 
 
+def is_probable_rss_url(url: str) -> bool:
+    """
+    判断一个 URL 是否大概率是 RSS / XML feed。
+
+    目的：
+    - 让 RSS 也可以统一走 --url
+    - 保留 --rss 老入口
+    - 不做网络探测，避免误把普通网页也请求一遍
+    """
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    query = parsed.query.lower()
+
+    rss_path_patterns = [
+        r"/rss/?$",
+        r"/feed/?$",
+        r"/feed\.xml$",
+        r"/rss\.xml$",
+        r"/podcast\.xml$",
+        r"/atom\.xml$",
+        r"\.rss$",
+        r"\.xml$",
+    ]
+
+    if any(re.search(pattern, path) for pattern in rss_path_patterns):
+        return True
+
+    rss_query_keys = [
+        "feed=rss",
+        "feed=podcast",
+        "format=rss",
+        "format=xml",
+    ]
+
+    if any(key in query for key in rss_query_keys):
+        return True
+
+    # 一些常见播客 feed 域名/路径特征
+    host = parsed.netloc.lower()
+
+    if "rss" in host and path:
+        return True
+
+    if "feed" in host and path:
+        return True
+
+    return False
+
+
 def handle_url(url: str, args) -> int:
     host = urlparse(url).netloc.lower()
+
+    if is_afdian_url(url):
+        return handle_afdian_url(url, args)
+
+    if is_probable_rss_url(url):
+        print("[INFO] URL looks like RSS feed, dispatching to RSS handler")
+        return handle_rss(url, args)
 
     if "listennotes.com" in host:
         if is_listen_notes_podcast_page(url):
@@ -162,7 +318,6 @@ def handle_url(url: str, args) -> int:
     if "siji.typlog.io" in host:
         # 判断是单条 episode 或 archive 页面
         if "/archive/" in url:
-            # archive -> 批量
             import requests
             from bs4 import BeautifulSoup
             from urllib.parse import urljoin
@@ -171,7 +326,6 @@ def handle_url(url: str, args) -> int:
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # 收集 episode slugs
             episode_links = []
             for a in soup.find_all("a", href=True):
                 href = a["href"]
@@ -184,22 +338,33 @@ def handle_url(url: str, args) -> int:
 
             for ep_url in episode_links:
                 print(f"[INFO] downloading {ep_url}")
-                download_typlog_episode(ep_url, output_dir=args.output,
-                                        session=None, write_tag=not args.no_tag,
-                                        retag_existing=args.retag_existing)
+                download_typlog_episode(
+                    ep_url,
+                    output_dir=args.output,
+                    session=None,
+                    write_tag=not args.no_tag,
+                    retag_existing=args.retag_existing,
+                )
             return 0
+
         else:
-            # 单条 episode
             if args.list:
                 print(f"[INFO] Typlog episode: {url}")
                 return 0
-            download_typlog_episode(url, output_dir=args.output,
-                                    session=None, write_tag=not args.no_tag,
-                                    retag_existing=args.retag_existing)
+
+            download_typlog_episode(
+                url,
+                output_dir=args.output,
+                session=None,
+                write_tag=not args.no_tag,
+                retag_existing=args.retag_existing,
+            )
             return 0
 
     print(f"[ERROR] unsupported URL host: {host}")
-    print("[HINT] Currently supported URL hosts: listennotes.com, mp.weixin.qq.com")
+    print(
+        "[HINT] Currently supported URL hosts: listennotes.com, mp.weixin.qq.com, ifdian.net, afdian.com, RSS feed URLs"
+    )
     return 1
 
 
@@ -212,6 +377,9 @@ def dispatch_args(args) -> int:
 
     if args.url:
         return handle_url(args.url, args)
+
+    if getattr(args, "id", None):
+        return handle_afdian_id(args.id, args)
 
     return 1
 
@@ -266,16 +434,15 @@ def handle_listen_notes_list_url(url: str, args) -> int:
         and prev_pub_date
         and next_pub_date
         and max_pages > 1
-        and (
-            wanted_total is None
-            or wanted_total > len(first_page_links)
-        )
+        and (wanted_total is None or wanted_total > len(first_page_links))
     )
 
     if need_more:
         extra_pages = max_pages - 1
 
-        print(f"[INFO] load-more enabled: max_pages={max_pages}, extra_pages={extra_pages}")
+        print(
+            f"[INFO] load-more enabled: max_pages={max_pages}, extra_pages={extra_pages}"
+        )
 
         api_episodes = fetch_more_episodes_from_listen_notes_api(
             channel_uuid=channel_uuid,
@@ -293,11 +460,15 @@ def handle_listen_notes_list_url(url: str, args) -> int:
         and not need_more
     ):
         print("[WARN] Load-more requested but context is incomplete.")
-        print(f"[WARN] wanted_total={wanted_total}, first_page_links={len(first_page_links)}")
+        print(
+            f"[WARN] wanted_total={wanted_total}, first_page_links={len(first_page_links)}"
+        )
         print(f"[WARN] channel_uuid={channel_uuid or '(not found)'}")
         print(f"[WARN] prev_pub_date={prev_pub_date}")
         print(f"[WARN] next_pub_date={next_pub_date}")
-        print("[HINT] Auto context extraction failed. Check debug_listennotes_context.html or pass override args.")
+        print(
+            "[HINT] Auto context extraction failed. Check debug_listennotes_context.html or pass override args."
+        )
 
     jobs = []
 
@@ -310,10 +481,12 @@ def handle_listen_notes_list_url(url: str, args) -> int:
     if args.all:
         selected_jobs = jobs[offset:]
     elif latest is not None:
-        selected_jobs = jobs[offset: offset + latest]
+        selected_jobs = jobs[offset : offset + latest]
     else:
         print("[ERROR] Listen Notes list mode requires --latest n or --all")
-        print("[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30")
+        print(
+            "[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30"
+        )
         return 1
 
     print(f"[INFO] total collected episodes: {len(jobs)}")
@@ -321,7 +494,9 @@ def handle_listen_notes_list_url(url: str, args) -> int:
     print(f"[INFO] selected episodes: {len(selected_jobs)}")
 
     if latest is not None and len(selected_jobs) < latest:
-        print(f"[WARN] selected episodes less than requested: selected={len(selected_jobs)}, requested={latest}")
+        print(
+            f"[WARN] selected episodes less than requested: selected={len(selected_jobs)}, requested={latest}"
+        )
         print("[HINT] Increase --max-pages or check load-more context.")
 
     if args.list:
@@ -388,7 +563,7 @@ def handle_listen_notes_list_url(url: str, args) -> int:
                     write_tag=not args.no_tag,
                     retag_existing=args.retag_existing,
                 )
-    
+
     # 批量写 tag（只写，不再 download）
     if not args.no_tag:
         for audio_url, episode in episode_map.items():
@@ -414,5 +589,5 @@ def handle_listen_notes_list_url(url: str, args) -> int:
                         cover_url=episode.cover_url,
                         session=session,
                     )
-    
+
     return 0
