@@ -365,6 +365,24 @@ def handle_rss(rss_url: str, args) -> int:
 
     return 0
 
+rss_path_patterns = [
+    r"/rss(?:/|$)",
+    r"/feed(?:/|$)",
+    r"/podcast(?:/|$)",
+    r"/feed\.xml$",
+    r"/rss\.xml$",
+    r"/podcast\.xml$",
+    r"/atom\.xml$",
+    r"\.rss$",
+    r"\.xml$",
+]
+
+rss_query_keys = [
+    "feed=rss",
+    "feed=podcast",
+    "format=rss",
+    "format=xml",
+]
 
 def is_probable_rss_url(url: str) -> bool:
     """
@@ -379,26 +397,8 @@ def is_probable_rss_url(url: str) -> bool:
     path = parsed.path.lower()
     query = parsed.query.lower()
 
-    rss_path_patterns = [
-        r"/rss/?$",
-        r"/feed/?$",
-        r"/feed\.xml$",
-        r"/rss\.xml$",
-        r"/podcast\.xml$",
-        r"/atom\.xml$",
-        r"\.rss$",
-        r"\.xml$",
-    ]
-
     if any(re.search(pattern, path) for pattern in rss_path_patterns):
         return True
-
-    rss_query_keys = [
-        "feed=rss",
-        "feed=podcast",
-        "format=rss",
-        "format=xml",
-    ]
 
     if any(key in query for key in rss_query_keys):
         return True
