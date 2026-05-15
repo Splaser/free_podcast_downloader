@@ -559,3 +559,146 @@ def tag_mp3(
     except Exception as e:
         print(f"[WARN] mp3 tagging failed: {e}")
         return False
+
+
+def has_m4a_cover(filename: str) -> bool:
+    try:
+        audio = MP4(filename)
+        covers = audio.get("covr")
+        return bool(covers)
+    except Exception:
+        return False
+
+
+def has_mp3_cover(filename: str) -> bool:
+    try:
+        id3 = ID3(filename)
+        return bool(id3.getall("APIC"))
+    except Exception:
+        return False
+
+
+def has_cover(filename: str, ext: str) -> bool:
+    ext = ext.lower()
+
+    if ext in [".m4a", ".mp4"]:
+        return has_m4a_cover(filename)
+
+    if ext == ".mp3":
+        return has_mp3_cover(filename)
+
+    return False
+
+
+def write_m4a_cover_only(
+    filename: str,
+    title: str,
+    album: str,
+    cover_url: str = "",
+    session=None,
+) -> bool:
+    try:
+        audio = MP4(filename)
+
+        cover_data = _resolve_cover_data(
+            filename=filename,
+            title=title,
+            album=album,
+            cover_url=cover_url,
+            session=session,
+        )
+
+        if not cover_data:
+            print(f"[INFO] no cover data resolved: {filename}")
+            return False
+
+        image_format = MP4Cover.FORMAT_JPEG
+        if cover_data.startswith(b"\x89PNG\r\n\x1a\n"):
+            image_format = MP4Cover.FORMAT_PNG
+
+        audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
+        audio.save()
+
+        print(f"[INFO] m4a cover saved: {filename}")
+        return True
+
+    except Exception as e:
+        print(f"[WARN] m4a cover fix failed: {filename} | {e}")
+        return False
+    
+
+def write_mp3_cover_only(
+    filename: str,
+    title: str,
+    album: str,
+    cover_url: str = "",
+    session=None,
+) -> bool:
+    try:
+        try:
+            id3 = ID3(filename)
+        except ID3NoHeaderError:
+            id3 = ID3()
+
+        cover_data = _resolve_cover_data(
+            filename=filename,
+            title=title,
+            album=album,
+            cover_url=cover_url,
+            session=session,
+        )
+
+        if not cover_data:
+            print(f"[INFO] no cover data resolved: {filename}")
+            return False
+
+        id3.delall("APIC")
+        id3.add(
+            APIC(
+                encoding=3,
+                mime=_guess_image_mime(cover_data),
+                type=3,
+                desc="Cover",
+                data=cover_data,
+            )
+        )
+        id3.save(filename)
+
+        print(f"[INFO] mp3 cover saved: {filename}")
+        return True
+
+    except Exception as e:
+        print(f"[WARN] mp3 cover fix failed: {filename} | {e}")
+        return False
+    
+
+def fix_cover_only(
+    filename: str,
+    ext: str,
+    title: str,
+    album: str,
+    cover_url: str = "",
+    session=None,
+) -> bool:
+    ext = ext.lower()
+
+    if ext in [".m4a", ".mp4"]:
+        return write_m4a_cover_only(
+            filename=filename,
+            title=title,
+            album=album,
+            cover_url=cover_url,
+            session=session,
+        )
+
+    if ext == ".mp3":
+        return write_mp3_cover_only(
+            filename=filename,
+            title=title,
+            album=album,
+            cover_url=cover_url,
+            session=session,
+        )
+
+    print(f"[WARN] cover fix skipped for unsupported ext: {ext} | {filename}")
+    return False

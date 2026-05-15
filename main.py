@@ -77,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--fix-cover",
+        action="store_true",
+        help="Only fix missing embedded covers for existing files",
+    )
+
+    parser.add_argument(
         "--retag-existing",
         action="store_true",
         help="Retag existing files even if basic metadata already exists.",

@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 
 from urllib.parse import urlparse
-from .tagging import tag_m4a, tag_mp3, has_basic_tags
+from .tagging import tag_m4a, tag_mp3, has_basic_tags, has_cover, fix_cover_only
 from .session_utils import create_session
 from .wechat import parse_wechat_article
 from .rss import (
@@ -329,6 +329,22 @@ def handle_rss(rss_url: str, args) -> int:
             if not target_path.exists():
                 continue
             
+            if getattr(args, "fix_cover", False):
+                if has_cover(str(target_path), episode.ext):
+                    print(f"[INFO] cover exists, skip: {target_path}")
+                    continue
+
+                fix_cover_only(
+                    filename=str(target_path),
+                    ext=episode.ext,
+                    title=episode.title,
+                    album=episode.podcast_title,
+                    cover_url=episode.cover_url,
+                    session=session,
+                )
+                continue
+
+
             aria2_control_file = target_path.with_name(target_path.name + ".aria2")
             if aria2_control_file.exists():
                 print(f"[INFO] skip tagging incomplete aria2 file: {target_path}")
