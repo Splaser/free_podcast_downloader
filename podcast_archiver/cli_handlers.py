@@ -18,7 +18,7 @@ from .downloader import (
     has_aria2,
 )
 from .filename import sanitize_filename
-
+from .listen_notes_cursor_cache import get_best_cursor
 from .listen_notes import parse_listen_notes_episode
 from .listen_notes_list import (
     is_listen_notes_podcast_page,
@@ -410,8 +410,34 @@ def handle_listen_notes_list_url(url: str, args) -> int:
 
     page_size = len(first_page_links) or 10
 
+    cursor_hit = None
+    virtual_offset_base = 0
+    if offset > len(first_page_links) and channel_uuid:
+        cursor_hit = get_best_cursor(channel_uuid, offset)
+
+        if cursor_hit:
+            cached_count = int(cursor_hit.get("collected_count") or 0)
+
+            print(
+                f"[INFO] Listen Notes cursor cache hit: "
+                f"cached_count={cached_count}, requested_offset={offset}"
+            )
+
+            next_pub_date = int(cursor_hit["next_pub_date"])
+
+            if cursor_hit.get("prev_pub_date"):
+                prev_pub_date = int(cursor_hit["prev_pub_date"])
+
+            virtual_offset_base = cached_count
+
+            # 缓存命中后，首屏 links 不再参与本次 jobs。
+            # 因为我们准备从 cached cursor 后面继续拉。
+            first_page_links = []
+
+
+
     if latest is not None:
-        wanted_total = offset + latest
+        wanted_total = max(offset - virtual_offset_base, 0) + latest
     elif args.all:
         wanted_total = None
     else:
@@ -429,19 +455,27 @@ def handle_listen_notes_list_url(url: str, args) -> int:
     print(f"[INFO] wanted_total={wanted_total}")
     print(f"[INFO] max_pages={max_pages}")
 
+    cache_mode = bool(cursor_hit)
+
+    if cache_mode:
+        api_pages_needed = max_pages
+    else:
+        api_pages_needed = max_pages - 1
+
     need_more = (
         channel_uuid
         and prev_pub_date
         and next_pub_date
-        and max_pages > 1
+        and api_pages_needed > 0
         and (wanted_total is None or wanted_total > len(first_page_links))
     )
 
     if need_more:
-        extra_pages = max_pages - 1
+        extra_pages = api_pages_needed
 
         print(
-            f"[INFO] load-more enabled: max_pages={max_pages}, extra_pages={extra_pages}"
+            f"[INFO] load-more enabled: max_pages={max_pages}, "
+            f"extra_pages={extra_pages}, cache_mode={cache_mode}"
         )
 
         api_episodes = fetch_more_episodes_from_listen_notes_api(
@@ -451,6 +485,8 @@ def handle_listen_notes_list_url(url: str, args) -> int:
             prev_pub_date=prev_pub_date,
             max_pages=extra_pages,
             referer_url=url,
+            initial_collected_count=virtual_offset_base,
+            initial_page_index=virtual_offset_base // page_size,
         )
 
     if (
@@ -478,15 +514,16 @@ def handle_listen_notes_list_url(url: str, args) -> int:
     for episode in api_episodes:
         jobs.append(("api", episode))
 
+    effective_offset = max(offset - virtual_offset_base, 0)
+    print(f"[INFO] effective_offset={effective_offset}")
+    
     if args.all:
-        selected_jobs = jobs[offset:]
+        selected_jobs = jobs[effective_offset:]
     elif latest is not None:
-        selected_jobs = jobs[offset : offset + latest]
+        selected_jobs = jobs[effective_offset: effective_offset + latest]
     else:
         print("[ERROR] Listen Notes list mode requires --latest n or --all")
-        print(
-            "[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30"
-        )
+        print("[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30")
         return 1
 
     print(f"[INFO] total collected episodes: {len(jobs)}")

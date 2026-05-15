@@ -7,8 +7,8 @@ import html
 import re
 from bs4 import BeautifulSoup
 from .listen_notes import Episode
+from .listen_notes_cursor_cache import save_cursor
 from datetime import datetime, timezone
-
 
 
 def _extract_one_int(patterns: list[str], text: str) -> int | None:
@@ -113,9 +113,7 @@ def _fill_list_context_from_episode_pages(ctx: dict, session) -> dict:
 
     if not ctx.get("channel_uuid"):
         ctx["channel_uuid"] = (
-            first_ctx.get("channel_uuid")
-            or last_ctx.get("channel_uuid")
-            or ""
+            first_ctx.get("channel_uuid") or last_ctx.get("channel_uuid") or ""
         )
 
     first_pub = first_ctx.get("pub_date_ms")
@@ -128,6 +126,7 @@ def _fill_list_context_from_episode_pages(ctx: dict, session) -> dict:
         ctx["next_pub_date"] = ctx.get("next_pub_date") or min(pub_values)
 
     return ctx
+
 
 def _guess_ext_from_api_item(item: dict) -> str:
     audio_url = (
@@ -157,17 +156,9 @@ def _html_to_text(value: str) -> str:
 def _episode_from_api_item(item: dict) -> Episode:
     channel = item.get("channel") or {}
 
-    title = (
-        item.get("episode_title")
-        or item.get("title")
-        or "episode"
-    )
+    title = item.get("episode_title") or item.get("title") or "episode"
 
-    podcast_title = (
-        channel.get("title")
-        or channel.get("channel_title")
-        or "Podcast"
-    )
+    podcast_title = channel.get("title") or channel.get("channel_title") or "Podcast"
 
     # Listen Notes API 的 channel.author 可能是 uploader / slug，
     # 例如 lamesbond。这里统一用 podcast title，保证 tag artist 稳定。
@@ -201,11 +192,13 @@ def _episode_from_api_item(item: dict) -> Episode:
         ext=_guess_ext_from_api_item(item),
     )
 
+
 def _get_cookie_value(session, name: str) -> str:
     try:
         return session.cookies.get(name) or ""
     except Exception:
         return ""
+
 
 def _fetch_listen_notes_api_page(
     channel_uuid: str,
@@ -294,6 +287,7 @@ def _fetch_listen_notes_api_page(
         print("[WARN] api raw response saved to debug_listennotes_api_response.bin")
         raise
 
+
 def fetch_more_episodes_from_listen_notes_api(
     channel_uuid: str,
     session,
@@ -301,6 +295,8 @@ def fetch_more_episodes_from_listen_notes_api(
     prev_pub_date: int,
     max_pages: int = 1,
     referer_url: str = "https://www.listennotes.com/",
+    initial_collected_count: int = 0,
+    initial_page_index: int = 0,
 ) -> list[Episode]:
     """
     从 Listen Notes Load more API 继续抓 episode。
@@ -313,6 +309,8 @@ def fetch_more_episodes_from_listen_notes_api(
     current_prev = prev_pub_date
 
     for page_index in range(max_pages):
+        real_page_index = initial_page_index + page_index + 1
+
         data = _fetch_listen_notes_api_page(
             channel_uuid=channel_uuid,
             session=session,
@@ -347,6 +345,18 @@ def fetch_more_episodes_from_listen_notes_api(
         next_value = bundle.get("next_pub_date")
         prev_value = bundle.get("previous_pub_date")
 
+        
+        collected_count = initial_collected_count + len(episodes)
+
+        save_cursor(
+            channel_uuid,
+            page_index=real_page_index,
+            collected_count=collected_count,
+            next_pub_date=int(next_value) if next_value else None,
+            prev_pub_date=int(prev_value) if prev_value else current_prev,
+            referer_url=referer_url,
+        )
+
         if not has_next or not next_value:
             break
 
@@ -356,6 +366,7 @@ def fetch_more_episodes_from_listen_notes_api(
             current_prev = int(prev_value)
 
     return episodes
+
 
 def _normalize_html(text: str) -> str:
     """
@@ -533,9 +544,7 @@ def _fill_list_context_from_episode_pages(ctx: dict, session) -> dict:
 
     if not ctx.get("channel_uuid"):
         ctx["channel_uuid"] = (
-            first_ctx.get("channel_uuid")
-            or last_ctx.get("channel_uuid")
-            or ""
+            first_ctx.get("channel_uuid") or last_ctx.get("channel_uuid") or ""
         )
 
     pub_values = []
@@ -665,49 +674,6 @@ def _extract_episode_links_from_html(page_url: str, page_html: str) -> list[str]
     return links
 
 
-def _extract_next_page_url(page_url: str, page_html: str) -> str:
-    """
-    尝试从 HTML 中提取 Load more / next page URL。
-
-    注意：
-    如果 Listen Notes 的 Load more 是纯 JS XHR，这里可能提取不到。
-    后续需要根据 Network 里的真实接口补规则。
-    """
-    soup = BeautifulSoup(page_html, "html.parser")
-
-    # 常见 data-url / data-href / href
-    for tag in soup.find_all(["a", "button"]):
-        text = tag.get_text(" ", strip=True).lower()
-
-        attrs = [
-            tag.get("data-url"),
-            tag.get("data-href"),
-            tag.get("data-next-url"),
-            tag.get("href"),
-        ]
-
-        if "load more" in text or "更多" in text or "next" in text:
-            for value in attrs:
-                if value:
-                    return urljoin(page_url, value)
-
-    # JSON / JS 里可能有 next_url / load_more_url
-    patterns = [
-        r'"next_url"\s*:\s*"([^"]+)"',
-        r'"nextUrl"\s*:\s*"([^"]+)"',
-        r'"load_more_url"\s*:\s*"([^"]+)"',
-        r'"loadMoreUrl"\s*:\s*"([^"]+)"',
-        r'data-next-url=["\']([^"\']+)["\']',
-    ]
-
-    for pattern in patterns:
-        m = re.search(pattern, page_html)
-        if m:
-            raw = html.unescape(m.group(1)).replace("\\/", "/")
-            return urljoin(page_url, raw)
-
-    return ""
-
 def extract_listen_notes_list_context(page_url: str, session) -> dict:
     page_html = _fetch_list_page(page_url, session=session)
 
@@ -725,7 +691,11 @@ def extract_listen_notes_list_context(page_url: str, session) -> dict:
 
     ctx = _fill_list_context_from_episode_pages(ctx, session=session)
 
-    if not ctx.get("channel_uuid") or not ctx.get("prev_pub_date") or not ctx.get("next_pub_date"):
+    if (
+        not ctx.get("channel_uuid")
+        or not ctx.get("prev_pub_date")
+        or not ctx.get("next_pub_date")
+    ):
         with open("debug_listennotes_context.html", "w", encoding="utf-8") as f:
             f.write(page_html)
         print("[WARN] list context incomplete; saved debug_listennotes_context.html")
