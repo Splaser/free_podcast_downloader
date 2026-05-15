@@ -331,6 +331,56 @@ def _find_reusable_cover(filename: str, title: str, album: str = "") -> bytes | 
     return None
 
 
+def _find_any_folder_cover(filename: str) -> bytes | None:
+    """
+    最后一层兜底：
+    在当前 podcast 目录里找任意一个已有 embedded cover 的音频文件。
+
+    用途：
+    - 远程封面 403
+    - 同系列 prefix 没找到 cover
+    - 但同 podcast 目录里其他节目已有封面
+    """
+    target_path = Path(filename)
+    folder = target_path.parent
+
+    if not folder.exists():
+        return None
+
+    candidates = []
+
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+
+        if path == target_path:
+            continue
+
+        if path.suffix.lower() not in [".mp3", ".m4a", ".mp4"]:
+            continue
+
+        aria2_control_file = path.with_name(path.name + ".aria2")
+        if aria2_control_file.exists():
+            continue
+
+        candidates.append(path)
+
+    # 修改时间新的优先，通常更可能刚刚成功写过封面
+    candidates.sort(
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+
+    for path in candidates:
+        data = _extract_cover_from_file(path)
+
+        if data:
+            print(f"[INFO] reused folder cover from: {path.name} -> {target_path.name}")
+            return data
+
+    return None
+
+
 def _resolve_cover_data(
     *,
     filename: str,
@@ -366,6 +416,12 @@ def _resolve_cover_data(
 
     if cover_data:
         return cover_data
+
+    cover_data = _find_any_folder_cover(filename)
+
+    if cover_data:
+        return cover_data
+
 
     print(f"[INFO] no reusable local cover found: {target_name}")
     return None
