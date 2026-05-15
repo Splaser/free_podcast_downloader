@@ -20,7 +20,7 @@
 ## 安装
 
 ```shell
-git clone <YOUR_REPO_URL>
+git clone <本项目>
 cd free_podcast_downloader
 pip install -r requirements.txt
 ```
