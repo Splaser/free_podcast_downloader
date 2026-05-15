@@ -4,7 +4,6 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
-from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup

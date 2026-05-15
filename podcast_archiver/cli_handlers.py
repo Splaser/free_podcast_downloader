@@ -13,13 +13,12 @@ from .rss import (
 )
 from .downloader import (
     download_episode,
-    download_file,
     download_files_aria2,
     has_aria2,
 )
 from .filename import sanitize_filename
 from .listen_notes_cursor_cache import get_best_cursor
-from .listen_notes import parse_listen_notes_episode
+from .listen_notes import parse_listen_notes_episode, Episode
 from .listen_notes_list import (
     is_listen_notes_podcast_page,
     extract_listen_notes_list_context,
@@ -175,17 +174,24 @@ def handle_wechat_url(url: str, args) -> int:
     if args.list:
         return 0
 
-    account_dir = sanitize_filename(audio.account)
-    filename = sanitize_filename(audio.title) + audio.ext
-    output_path = Path(args.output) / account_dir / filename
+    episode = Episode(
+        title=audio.title,
+        podcast_title=audio.account or "WeChat",
+        author=audio.account or "WeChat",
+        description=audio.source_url,
+        audio_url=audio.audio_url,
+        cover_url="",
+        source_url=audio.source_url,
+        ext=audio.ext,
+    )
 
-    print("output:", output_path)
-
-    download_file(audio.audio_url, output_path)
-
-    # 当前还没有接 MP3 tag，先明确提示。
-    if not args.no_tag:
-        print("[WARN] WeChat MP3 tagging is not implemented yet, skipped.")
+    output_path = download_episode(
+        episode,
+        output_dir=args.output,
+        session=None,
+        write_tag=not args.no_tag,
+        retag_existing=args.retag_existing,
+    )
 
     print("done:", output_path)
     return 0
@@ -434,8 +440,6 @@ def handle_listen_notes_list_url(url: str, args) -> int:
             # 因为我们准备从 cached cursor 后面继续拉。
             first_page_links = []
 
-
-
     if latest is not None:
         wanted_total = max(offset - virtual_offset_base, 0) + latest
     elif args.all:
@@ -516,14 +520,16 @@ def handle_listen_notes_list_url(url: str, args) -> int:
 
     effective_offset = max(offset - virtual_offset_base, 0)
     print(f"[INFO] effective_offset={effective_offset}")
-    
+
     if args.all:
         selected_jobs = jobs[effective_offset:]
     elif latest is not None:
-        selected_jobs = jobs[effective_offset: effective_offset + latest]
+        selected_jobs = jobs[effective_offset : effective_offset + latest]
     else:
         print("[ERROR] Listen Notes list mode requires --latest n or --all")
-        print("[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30")
+        print(
+            "[HINT] Example: python main.py --url LISTEN_NOTES_PODCAST_URL --latest 30"
+        )
         return 1
 
     print(f"[INFO] total collected episodes: {len(jobs)}")
