@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 
 from urllib.parse import urlparse
-from .tagging import tag_m4a, tag_mp3
+from .tagging import tag_m4a, tag_mp3, has_basic_tags
 from .session_utils import create_session
 from .wechat import parse_wechat_article
 from .rss import (
@@ -222,8 +222,12 @@ def handle_rss(rss_url: str, args) -> int:
 
     print(f"[INFO] selected episodes: {len(episodes)}")
 
-    for index, episode in enumerate(episodes, start=1):
-        print(f"[INFO] downloading {index}/{len(episodes)}")
+    # 先统一生成 target path，方便 aria2 直接按目标文件名保存
+    urls = []
+    episode_map = {}   # audio_url -> episode
+    download_map = {}  # audio_url -> target Path
+
+    for episode in episodes:
         print("title:", episode.title)
         print("podcast:", episode.podcast_title)
         print("audio:", episode.audio_url)
@@ -233,22 +237,131 @@ def handle_rss(rss_url: str, args) -> int:
         if origin:
             print("[INFO] original post url:", origin)
 
-        try:
-            output_path = download_episode(
-                episode,
-                output_dir=args.output,
-                session=session,
-                write_tag=not args.no_tag,
-                retag_existing=args.retag_existing,
-            )
+        target_path = (
+            Path(args.output)
+            / sanitize_filename(episode.podcast_title)
+            / (sanitize_filename(episode.title) + episode.ext)
+        )
 
-            print("done:", output_path)
+        urls.append(episode.audio_url)
+        episode_map[episode.audio_url] = episode
+        download_map[episode.audio_url] = target_path
 
-        except Exception as e:
-            print(f"[ERROR] download failed: {episode.title}")
-            print(f"[ERROR] {e}")
-            print()
-            continue
+    if has_aria2():
+        pending_urls = []
+        pending_filenames = []
+
+        for url in urls:
+            episode = episode_map[url]
+            target_path = download_map[url]
+
+            if target_path.exists():
+                print(f"[INFO] skip existing file before aria2: {target_path}")
+                continue
+
+            pending_urls.append(url)
+            pending_filenames.append(str(target_path.relative_to(Path(args.output))))
+
+        if pending_urls:
+            try:
+                download_files_aria2(
+                    pending_urls,
+                    Path(args.output),
+                    filenames=pending_filenames,
+                )
+            except Exception as e:
+                print(f"[WARN] aria2 batch failed: {e}")
+                print("[WARN] fallback to original single-download loop")
+
+                for url in pending_urls:
+                    episode = episode_map.get(url)
+                    if not episode:
+                        continue
+
+                    try:
+                        output_path = download_episode(
+                            episode,
+                            output_dir=args.output,
+                            session=session,
+                            write_tag=not args.no_tag,
+                            retag_existing=args.retag_existing,
+                        )
+                        print("done:", output_path)
+
+                    except Exception as e:
+                        print(f"[ERROR] download failed: {episode.title}")
+                        print(f"[ERROR] {e}")
+                        print()
+                        continue
+        else:
+            print("[INFO] no new files to download")
+
+    else:
+        print("[INFO] Aria2 not detected, using original single-download loop")
+
+        for index, episode in enumerate(episodes, start=1):
+            print(f"[INFO] downloading {index}/{len(episodes)}")
+
+            try:
+                output_path = download_episode(
+                    episode,
+                    output_dir=args.output,
+                    session=session,
+                    write_tag=not args.no_tag,
+                    retag_existing=args.retag_existing,
+                )
+                print("done:", output_path)
+
+            except Exception as e:
+                print(f"[ERROR] download failed: {episode.title}")
+                print(f"[ERROR] {e}")
+                print()
+                continue
+
+        return 0
+
+    # aria2 batch 下载后统一补 tag。
+    # 注意：已存在但缺 tag 的文件，也会在这里被补上。
+    if not args.no_tag:
+        for audio_url, episode in episode_map.items():
+            target_path = download_map[audio_url]
+
+            if not target_path.exists():
+                continue
+            
+            aria2_control_file = target_path.with_name(target_path.name + ".aria2")
+            if aria2_control_file.exists():
+                print(f"[INFO] skip tagging incomplete aria2 file: {target_path}")
+                continue
+
+            if not args.retag_existing and has_basic_tags(str(target_path), episode.ext):
+                print(f"[INFO] basic tags exist, skip retag: {target_path}")
+                continue
+
+            if episode.ext.lower() in [".m4a", ".mp4"]:
+                tag_m4a(
+                    str(target_path),
+                    title=episode.title,
+                    artist=episode.author or episode.podcast_title,
+                    album=episode.podcast_title,
+                    description=episode.description,
+                    cover_url=episode.cover_url,
+                    session=session,
+                )
+
+            elif episode.ext.lower() == ".mp3":
+                tag_mp3(
+                    str(target_path),
+                    title=episode.title,
+                    artist=episode.author or episode.podcast_title,
+                    album=episode.podcast_title,
+                    description=episode.description,
+                    cover_url=episode.cover_url,
+                    session=session,
+                )
+
+            else:
+                print(f"[WARN] tagging skipped for unsupported ext: {episode.ext}")
 
     return 0
 
