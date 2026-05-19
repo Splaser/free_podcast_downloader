@@ -451,9 +451,20 @@ def iter_album_items(
             params=params,
             timeout=30,
         )
+
+        print("[DEBUG] album-post status:", resp.status_code)
+        print("[DEBUG] album-post url:", resp.url)
+        print("[DEBUG] album-post preview:", resp.text[:500])
+
         resp.raise_for_status()
 
-        data = resp.json().get("data", {})
+        raw = resp.json()
+        print("[DEBUG] album-post json keys:", raw.keys())
+        print("[DEBUG] album-post ec:", raw.get("ec"))
+        print("[DEBUG] album-post msg:", raw.get("msg"))
+
+        data = raw.get("data", {})
+        
         page_items, has_more = extract_album_list(data)
 
         if not page_items:

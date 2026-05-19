@@ -3,8 +3,10 @@ from pathlib import Path
 
 import requests
 import tempfile
-from podcast_archiver.filename import sanitize_filename
-from podcast_archiver.tagging import tag_m4a, tag_mp3, has_basic_tags
+from .filename import sanitize_filename
+from .tagging import tag_m4a, tag_mp3, has_basic_tags
+from .markdown_sidecar import write_episode_markdown_sidecar
+
 import subprocess
 
 
@@ -264,5 +266,16 @@ def download_episode(
 
     elif write_tag:
         print(f"[WARN] tagging skipped for unsupported ext: {episode.ext}")
+
+    try:
+        write_episode_markdown_sidecar(
+            episode,
+            output_path,
+            overwrite=retag_existing,
+        )
+    except Exception as e:
+        print(f"[WARN] markdown sidecar failed: {output_path} | {e}")
+
+    return output_path
 
     return output_path
