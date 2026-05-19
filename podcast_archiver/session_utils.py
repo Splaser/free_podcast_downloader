@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 from pathlib import Path
-import os
-import sys
-
+from .firefox_cookie_sqlite import find_best_firefox_cookiejar
 import browser_cookie3
 import requests
 
@@ -32,93 +30,6 @@ def _is_afdian_domain(domain: str) -> bool:
 
 def _has_cookie_name(cookiejar, name: str) -> bool:
     return any(c.name == name for c in cookiejar)
-
-
-def _firefox_profiles_root() -> Path | None:
-    if sys.platform.startswith("win"):
-        appdata = os.environ.get("APPDATA")
-        if not appdata:
-            return None
-        return Path(appdata) / "Mozilla" / "Firefox" / "Profiles"
-
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Firefox" / "Profiles"
-
-    return Path.home() / ".mozilla" / "firefox"
-
-
-def _find_firefox_cookie_files() -> list[Path]:
-    root = _firefox_profiles_root()
-    if not root or not root.exists():
-        return []
-
-    cookie_files = []
-
-    for profile_dir in root.iterdir():
-        if not profile_dir.is_dir():
-            continue
-
-        cookie_file = profile_dir / "cookies.sqlite"
-        if cookie_file.exists():
-            cookie_files.append(cookie_file)
-
-    return cookie_files
-
-
-def _load_firefox_cookies_from_profiles(domains: list[str], required_cookie: str = "auth_token"):
-    """
-    Firefox 多 profile 兜底：
-    自动扫描所有 profile，优先选择能读到 required_cookie 的 cookies.sqlite。
-    """
-    best = None
-    best_score = -1
-
-    cookie_files = _find_firefox_cookie_files()
-
-    if not cookie_files:
-        print("[WARN] no Firefox cookies.sqlite found in profiles")
-        return requests.cookies.RequestsCookieJar()
-
-    print(f"[INFO] scanning Firefox profiles for {required_cookie}: {len(cookie_files)} profile(s)")
-
-    for cookie_file in cookie_files:
-        merged = requests.cookies.RequestsCookieJar()
-
-        for domain in domains:
-            try:
-                cj = browser_cookie3.firefox(
-                    domain_name=domain,
-                    cookie_file=str(cookie_file),
-                )
-                merged.update(cj)
-            except Exception as e:
-                print(f"[WARN] failed to read {cookie_file.parent.name} for {domain}: {e}")
-
-        names = {c.name for c in merged}
-
-        score = 0
-        if required_cookie in names:
-            score += 1000
-
-        # cookie 数量多一点通常也更像真实登录 profile
-        score += len(names)
-
-        if score > best_score:
-            best_score = score
-            best = (cookie_file, merged, names)
-
-    if not best:
-        return requests.cookies.RequestsCookieJar()
-
-    cookie_file, merged, names = best
-
-    if required_cookie in names:
-        print(f"[INFO] Firefox profile auto-selected: {cookie_file.parent.name}")
-        print(f"[INFO] matched cookie_file: {cookie_file}")
-    else:
-        print("[WARN] no Firefox profile contains required cookie:", required_cookie)
-
-    return merged
 
 
 def _normalize_domain(domain: str) -> str:
@@ -258,7 +169,8 @@ def create_session(
             print(f"[INFO] using explicit cookie_file: {cookie_path}")
 
             if not cookie_path.exists():
-                print(f"[WARN] cookie_file not found: {cookie_path}")
+                            print(f"[WARN] cookie_file not found: {cookie_path}")
+                            cookie_file = None
 
         cj = _load_browser_cookies(
             browser,
@@ -276,18 +188,24 @@ def create_session(
             and not _has_cookie_name(session.cookies, "auth_token")
         ):
             print("[WARN] auth_token not found from default Firefox cookie loading")
-            print("[INFO] trying Firefox profile auto-detection...")
+            print("[INFO] trying Firefox sqlite profile auto-detection...")
 
-            fallback_cj = _load_firefox_cookies_from_profiles(
-                domains,
+            _, fallback_cj = find_best_firefox_cookiejar(
+                hosts=[
+                    "ifdian.net",
+                    "www.ifdian.net",
+                    "afdian.com",
+                    "www.afdian.com",
+                ],
                 required_cookie="auth_token",
+                debug=True,
             )
 
             if _has_cookie_name(fallback_cj, "auth_token"):
                 session.cookies.update(fallback_cj)
-                print("[INFO] auth_token loaded via Firefox profile auto-detection")
+                print("[INFO] auth_token loaded via Firefox sqlite profile auto-detection")
             else:
-                print("[WARN] Firefox profile auto-detection did not find auth_token")
+                print("[WARN] Firefox sqlite profile auto-detection did not find auth_token")
 
         cookie_names = sorted({c.name for c in session.cookies})
 
@@ -305,7 +223,7 @@ def create_session(
                 "[WARN] no browser cookies loaded. Make sure the target site is logged in with this browser profile."
             )
 
-        if "ifdian.net" in normalized or "afdian.com" in normalized:
+        if _is_afdian_domain(domain):
             if "auth_token" not in cookie_names:
                 print(
                     "[WARN] auth_token not found. Afdian paid/private resources may return empty data."
