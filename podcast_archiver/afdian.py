@@ -542,8 +542,12 @@ def get_album_episodes(
         if ep:
             episodes.append(ep)
 
-    return episodes
+    total = len(episodes)
+    for index, ep in enumerate(episodes, start=1):
+        setattr(ep, "track_index", index)
+        setattr(ep, "track_total", total)
 
+    return episodes
 
 def get_single_post_episode(
     post_id: str,

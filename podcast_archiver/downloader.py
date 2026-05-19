@@ -9,15 +9,15 @@ from .markdown_sidecar import write_episode_markdown_sidecar
 
 import subprocess
 
-
 # key = str(output_path)，value = 已下载字节数
 _downloaded_progress = {}
 
 
 def has_aria2():
     try:
-        subprocess.run(["aria2c", "-v"], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["aria2c", "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         return True
     except FileNotFoundError:
         return False
@@ -30,10 +30,14 @@ def download_file_aria2(url: str, output_path: Path):
         "-c",  # 断点续传
         "--auto-file-renaming=false",
         "--allow-overwrite=true",
-        "-x", "4",
-        "-s", "4",
-        "-o", str(output_path.name),
-        "-d", str(output_path.parent),
+        "-x",
+        "4",
+        "-s",
+        "4",
+        "-o",
+        str(output_path.name),
+        "-d",
+        str(output_path.parent),
         url,
     ]
     print(f"[INFO] aria2 downloading {url}")
@@ -41,10 +45,12 @@ def download_file_aria2(url: str, output_path: Path):
     print(f"[INFO] saved: {output_path}")
 
 
-def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str] | None = None):
+def download_files_aria2(
+    urls: list[str], output_dir: Path, filenames: list[str] | None = None
+):
     """
     使用 aria2 批量下载所有 url，直接指定输出文件名，避免后续 rename。
-    
+
     urls: List of download links
     output_dir: 存储目录
     filenames: List of target filenames（与 urls 对应），若为 None，则自动生成 ep_1, ep_2...
@@ -67,16 +73,20 @@ def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str]
 
     cmd = [
         "aria2c",
-        "-i", list_file,
+        "-i",
+        list_file,
         "-c",
         "--auto-file-renaming=false",
         "--allow-overwrite=true",
-        "-x", "2",
-        "-s", "2",
+        "-x",
+        "2",
+        "-s",
+        "2",
         "--min-split-size=10M",
         "--max-tries=5",
         "--retry-wait=5",
-        "-d", str(output_dir),
+        "-d",
+        str(output_dir),
     ]
 
     print(f"[INFO] aria2 batch downloading {len(urls)} files to {output_dir}")
@@ -84,7 +94,7 @@ def download_files_aria2(urls: list[str], output_dir: Path, filenames: list[str]
     print(f"[INFO] aria2 batch download finished")
 
 
-def download_file(url: str, output_path: Path, session=None, chunk_size=1024*256):
+def download_file(url: str, output_path: Path, session=None, chunk_size=1024 * 256):
     """
     普通下载文件（requests fallback），断点续传由 download_file_resume 或者文件大小控制
     """
@@ -105,7 +115,9 @@ def download_file(url: str, output_path: Path, session=None, chunk_size=1024*256
     _downloaded_progress[str(output_path)] = downloaded
 
     try:
-        with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
+        with s.get(
+            url, stream=True, timeout=60, headers=headers, allow_redirects=True
+        ) as resp:
             if resp.status_code not in [200, 206]:
                 resp.raise_for_status()
 
@@ -125,14 +137,20 @@ def download_file(url: str, output_path: Path, session=None, chunk_size=1024*256
                     _downloaded_progress[str(output_path)] = downloaded
                     if total:
                         percent = min(downloaded * 100 / total, 100)
-                        print(f"\r[INFO] downloading... {percent:.1f}%", end="", flush=True)
+                        print(
+                            f"\r[INFO] downloading... {percent:.1f}%",
+                            end="",
+                            flush=True,
+                        )
         print()
         print(f"[INFO] saved: {output_path}")
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"[ERROR] Failed to download file via requests: {url} | {e}")
 
 
-def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1024*256):
+def download_file_resume(
+    url: str, output_path: Path, session=None, chunk_size=1024 * 256
+):
     key = str(output_path)
     downloaded = _downloaded_progress.get(key, 0)
     if output_path.exists():
@@ -164,14 +182,18 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
 
     for attempt in range(3):
         try:
-            with s.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True) as resp:
+            with s.get(
+                url, stream=True, timeout=60, headers=headers, allow_redirects=True
+            ) as resp:
                 if resp.status_code not in [200, 206]:
                     resp.raise_for_status()
 
                 # 如果本地已有部分文件，但服务端没有按 Range 返回 206，
                 # 说明它准备从头返回完整文件。此时不能 ab 追加，否则文件会损坏。
                 if downloaded > 0 and resp.status_code == 200:
-                    print("[WARN] server ignored Range request, restarting download from 0")
+                    print(
+                        "[WARN] server ignored Range request, restarting download from 0"
+                    )
                     downloaded = 0
                     _downloaded_progress[key] = 0
                     mode = "wb"
@@ -184,7 +206,7 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
                     total = int(total) + downloaded if downloaded else int(total)
                 else:
                     total = None
-                    
+
                 with open(output_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=chunk_size):
                         if chunk:
@@ -193,7 +215,11 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
                             _downloaded_progress[key] = downloaded
                             if total:
                                 percent = min(downloaded * 100 / total, 100)
-                                print(f"\r[INFO] downloading... {percent:.1f}%", end="", flush=True)
+                                print(
+                                    f"\r[INFO] downloading... {percent:.1f}%",
+                                    end="",
+                                    flush=True,
+                                )
             print()
             print(f"[INFO] saved: {output_path}")
             return
@@ -201,9 +227,12 @@ def download_file_resume(url: str, output_path: Path, session=None, chunk_size=1
             print(f"[WARN] download attempt {attempt+1}/3 failed: {e}")
             if attempt < 2:
                 import time
+
                 time.sleep(3)
             else:
-                raise RuntimeError(f"[ERROR] Failed to download after 3 attempts: {url}")
+                raise RuntimeError(
+                    f"[ERROR] Failed to download after 3 attempts: {url}"
+                )
 
 
 def download_episode(
@@ -224,6 +253,8 @@ def download_episode(
     """
     podcast_dir = sanitize_filename(episode.podcast_title)
     filename = sanitize_filename(episode.title) + episode.ext
+    track_index = getattr(episode, "track_index", None)
+    track_total = getattr(episode, "track_total", None)
 
     output_path = Path(output_dir) / podcast_dir / filename
 
@@ -232,7 +263,9 @@ def download_episode(
     if file_existed:
         if write_tag:
             if not retag_existing and has_basic_tags(str(output_path), episode.ext):
-                print("[INFO] file exists and basic tags exist, skip download and retag")
+                print(
+                    "[INFO] file exists and basic tags exist, skip download and retag"
+                )
                 return output_path
             else:
                 print("[INFO] file exists, skip download and write/refresh tags")
@@ -251,6 +284,8 @@ def download_episode(
             description=episode.description,
             cover_url=episode.cover_url,
             session=session,
+            track_index=track_index,
+            track_total=track_total,
         )
 
     elif write_tag and episode.ext.lower() == ".mp3":
@@ -262,6 +297,8 @@ def download_episode(
             description=episode.description,
             cover_url=episode.cover_url,
             session=session,
+            track_index=track_index,
+            track_total=track_total,
         )
 
     elif write_tag:
@@ -275,7 +312,5 @@ def download_episode(
         )
     except Exception as e:
         print(f"[WARN] markdown sidecar failed: {output_path} | {e}")
-
-    return output_path
 
     return output_path

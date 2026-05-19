@@ -121,7 +121,9 @@ def _download_cover(cover_url: str, session=None) -> bytes | None:
         return resp.content
 
     except Exception as e:
-        print(f"[WARN] remote cover unavailable, will try local fallback: {cover_url} | {e}")
+        print(
+            f"[WARN] remote cover unavailable, will try local fallback: {cover_url} | {e}"
+        )
         _cover_cache[cover_url] = None
         return None
 
@@ -307,7 +309,9 @@ def _find_reusable_cover(filename: str, title: str, album: str = "") -> bytes | 
             candidates.append((score, path))
 
     if not candidates:
-        print(f"[INFO] no local cover candidates for prefix: {target_prefix} -> {target_path.name}")
+        print(
+            f"[INFO] no local cover candidates for prefix: {target_prefix} -> {target_path.name}"
+        )
         return None
 
     # 分数高优先；同分时，离目标文件修改时间近的优先
@@ -422,7 +426,6 @@ def _resolve_cover_data(
     if cover_data:
         return cover_data
 
-
     print(f"[INFO] no reusable local cover found: {target_name}")
     return None
 
@@ -435,6 +438,8 @@ def tag_m4a(
     description: str = "",
     cover_url: str = "",
     session=None,
+    track_index: int | None = None,
+    track_total: int | None = None,
 ):
     """
     给 m4a/mp4 写 metadata。
@@ -472,6 +477,9 @@ def tag_m4a(
 
             audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
 
+        if track_index:
+            audio["trkn"] = [(track_index, track_total or 0)]
+
         audio.save()
         print(f"[INFO] m4a metadata saved: {filename}")
         return True
@@ -489,6 +497,8 @@ def tag_mp3(
     description: str = "",
     cover_url: str = "",
     session=None,
+    track_index: int | None = None,
+    track_total: int | None = None,
 ):
     """
     给 MP3 写 ID3 metadata。
@@ -515,6 +525,12 @@ def tag_mp3(
         audio["artist"] = artist
         audio["album"] = album
 
+        if track_index:
+            if track_total:
+                audio["tracknumber"] = f"{track_index}/{track_total}"
+            else:
+                audio["tracknumber"] = str(track_index)
+            
         audio.save()
 
         # EasyID3 不处理封面，所以封面用 ID3 APIC 写
@@ -550,6 +566,8 @@ def tag_mp3(
                     data=cover_data,
                 )
             )
+
+
 
         id3.save(filename)
 
@@ -625,7 +643,7 @@ def write_m4a_cover_only(
     except Exception as e:
         print(f"[WARN] m4a cover fix failed: {filename} | {e}")
         return False
-    
+
 
 def write_mp3_cover_only(
     filename: str,
@@ -670,7 +688,7 @@ def write_mp3_cover_only(
     except Exception as e:
         print(f"[WARN] mp3 cover fix failed: {filename} | {e}")
         return False
-    
+
 
 def fix_cover_only(
     filename: str,
