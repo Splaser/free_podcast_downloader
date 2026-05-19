@@ -19,6 +19,160 @@ POST_OUTPUT_TITLE = "single_posts"
 UrlKind = Literal["album", "post"]
 
 
+def _extract_publish_time(ep: Episode) -> int | None:
+    item = getattr(ep, "afdian_item", None)
+    if not isinstance(item, dict):
+        return None
+
+    value = item.get("publish_time") or item.get("publish_sn")
+    if value is None:
+        return None
+
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _has_publish_time_sort(episodes: list[Episode]) -> bool:
+    if not episodes:
+        return False
+
+    count = sum(_extract_publish_time(ep) is not None for ep in episodes)
+    return count == len(episodes)
+
+
+def _track_sort_key(ep: Episode, explicit_index: int | None) -> tuple[int, int]:
+    """
+    编号型 album 的排序规则。
+
+    group:
+    0 = 正片 / 显式编号
+    1 = 番外
+    2 = 附录
+    3 = 免费试听
+    4 = 其他兜底
+    """
+    title = ep.title or ""
+
+    # 免费试听最后，优先级最高
+    if "免费试听" in title:
+        return (3, 9999)
+
+    if explicit_index is not None:
+        return (0, explicit_index)
+
+    # 番外放在正片后
+    if "番外" in title:
+        return (1, 9000)
+
+    # 附录放番外后，尽量按标题里的日常节目编号排
+    m = re.search(r"第\s*0*(\d+)\s*期", title)
+    if title.startswith("附") and m:
+        return (2, int(m.group(1)))
+
+    if title.startswith("附"):
+        return (2, 9999)
+
+    return (4, 9999)
+
+
+def _assign_track_indexes(episodes: list[Episode]) -> list[Episode]:
+    indexed_episodes = [
+        (ep, _extract_title_index(ep.title))
+        for ep in episodes
+    ]
+
+    explicit_count = sum(index is not None for _, index in indexed_episodes)
+
+    # 多数条目能提取编号，就认为这是编号型专辑，而不是 feed 型专辑
+    use_title_index = (
+        len(episodes) > 0
+        and explicit_count >= 3
+        and explicit_count >= len(episodes) * 0.5
+    )
+
+    if use_title_index:
+        indexed_episodes = sorted(
+            indexed_episodes,
+            key=lambda pair: _track_sort_key(pair[0], pair[1]),
+        )
+
+        episodes = [ep for ep, _ in indexed_episodes]
+
+        total = len(episodes)
+        for index, ep in enumerate(episodes, start=1):
+            setattr(ep, "track_index", index)
+            setattr(ep, "track_total", total)
+            print(
+                f"[DEBUG] track index from title-sort: "
+                f"{index}/{total} | {ep.title}"
+            )
+
+    elif _has_publish_time_sort(episodes):
+        episodes = sorted(episodes, key=lambda ep: _extract_publish_time(ep) or 0)
+
+        total = len(episodes)
+        for index, ep in enumerate(episodes, start=1):
+            setattr(ep, "track_index", index)
+            setattr(ep, "track_total", total)
+            print(
+                f"[DEBUG] track index from publish_time: "
+                f"{index}/{total} | {ep.title}"
+            )
+    else:
+        total = len(episodes)
+        for index, ep in enumerate(episodes, start=1):
+            setattr(ep, "track_index", index)
+            setattr(ep, "track_total", total)
+            print(
+                f"[DEBUG] track index from album order: "
+                f"{index}/{total} | {ep.title}"
+                )
+
+    return episodes
+
+
+def _extract_title_index(title: str) -> int | None:
+    """
+    从标题中提取显式节目序号。
+
+    优先识别标题开头附近的编号，避免误抓正文里的年份/评分/期数。
+    """
+    title = (title or "").strip()
+
+    patterns = [
+        # 001、xxx / 001. xxx / 001：xxx
+        r"^\s*0*(\d{1,4})\s*[、.．:：\-—_]\s*",
+
+        # EP001 / E001 / No.001 / #001
+        r"^\s*(?:EP|E|No\.?|#)\s*0*(\d{1,4})\b",
+
+        # 第001期 / 第001集 / 第001回
+        r"^\s*第\s*0*(\d{1,4})\s*[期集回话讲章]\b",
+
+        # 系列名001：xxx
+        # 例：书影012、QA009、会员问答005、某某专题012
+        r"^\s*[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9·\-\s]{0,20}?\s*0*(\d{1,4})\s*[:：：\-—_、 ]",
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, title, re.I)
+        if not m:
+            continue
+
+        try:
+            value = int(m.group(1))
+        except ValueError:
+            continue
+
+        # 防止误抓年份，比如 2018、2024
+        if 1 <= value <= 999:
+            return value
+
+    return None
+
+
 def is_afdian_url(url: str) -> bool:
     host = urlparse(url).netloc.lower()
     return (
@@ -540,14 +694,13 @@ def get_album_episodes(
     for item in items:
         ep = _episode_from_item(item, podcast_title=album_name)
         if ep:
+            setattr(ep, "afdian_item", item)
             episodes.append(ep)
 
-    total = len(episodes)
-    for index, ep in enumerate(episodes, start=1):
-        setattr(ep, "track_index", index)
-        setattr(ep, "track_total", total)
 
+    episodes = _assign_track_indexes(episodes)
     return episodes
+
 
 def get_single_post_episode(
     post_id: str,
