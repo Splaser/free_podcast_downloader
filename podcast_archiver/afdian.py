@@ -42,7 +42,39 @@ def _has_publish_time_sort(episodes: list[Episode]) -> bool:
     return count == len(episodes)
 
 
-def _track_sort_key(ep: Episode, explicit_index: int | None) -> tuple[int, int]:
+def _episode_sub_order(title: str) -> int:
+    """
+    同一主编号下的次序微调。
+
+    数字越小越靠前：
+    0 = 默认主条目
+    1 = 上
+    2 = 中
+    3 = 下
+    4 = 焦点问题 / 扩展问题
+    5 = 免费 / 试听
+    """
+    title = title or ""
+
+    if "（上）" in title or "(上)" in title or "-上" in title or "上：" in title:
+        return 1
+
+    if "（中）" in title or "(中)" in title or "-中" in title or "中：" in title:
+        return 2
+
+    if "（下）" in title or "(下)" in title or "-下" in title or "下：" in title:
+        return 3
+
+    if "焦点问题" in title:
+        return 4
+
+    if "免费" in title or "试听" in title:
+        return 5
+
+    return 0
+
+
+def _track_sort_key(ep: Episode, explicit_index: int | None) -> tuple[int, int, int]:
     """
     编号型 album 的排序规则。
 
@@ -57,24 +89,24 @@ def _track_sort_key(ep: Episode, explicit_index: int | None) -> tuple[int, int]:
 
     # 免费试听最后，优先级最高
     if "免费试听" in title:
-        return (3, 9999)
+        return (3, 9999, 0)
 
     if explicit_index is not None:
-        return (0, explicit_index)
+        return (0, explicit_index, _episode_sub_order(title))
 
     # 番外放在正片后
     if "番外" in title:
-        return (1, 9000)
+        return (1, 9000, 0)
 
     # 附录放番外后，尽量按标题里的日常节目编号排
     m = re.search(r"第\s*0*(\d+)\s*期", title)
     if title.startswith("附") and m:
-        return (2, int(m.group(1)))
+        return (2, int(m.group(1)), 0)
 
     if title.startswith("附"):
-        return (2, 9999)
+        return (2, 9999, 0)
 
-    return (4, 9999)
+    return (4, 9999, 0)
 
 
 def _assign_track_indexes(episodes: list[Episode]) -> list[Episode]:
@@ -151,9 +183,9 @@ def _extract_title_index(title: str) -> int | None:
         # 第001期 / 第001集 / 第001回
         r"^\s*第\s*0*(\d{1,4})\s*[期集回话讲章]\b",
 
-        # 系列名001：xxx
-        # 例：书影012、QA009、会员问答005、某某专题012
-        r"^\s*[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9·\-\s]{0,20}?\s*0*(\d{1,4})\s*[:：：\-—_、 ]",
+        # 系列名001：xxx / QA007（上） / QA007-上 / 书影012：xxx
+        # 例：书影012、QA009、会员问答005、某某专题012、QA007（上）
+        r"^\s*[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9·\-\s]{0,20}?\s*0*(\d{1,4})(?=\s*[:：\-—_、 （(]|$)",
     ]
 
     for pattern in patterns:
