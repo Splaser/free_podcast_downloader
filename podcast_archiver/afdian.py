@@ -463,8 +463,21 @@ def iter_album_items(
         print("[DEBUG] album-post ec:", raw.get("ec"))
         print("[DEBUG] album-post msg:", raw.get("msg"))
 
+        raw = resp.json()
+
+        ec = raw.get("ec")
+        em = raw.get("em") or raw.get("msg") or ""
+
+        if ec != 200:
+            print(f"[ERROR] Afdian API error: ec={ec}, em={em}")
+
+            if ec == 40100:
+                print("[HINT] 当前 session 没有有效登录态。请确认浏览器已登录 ifdian.net，并且脚本读取的是同一个浏览器 profile。")
+                print("[HINT] 如果 cookie names 里没有 auth_token，说明没有拿到爱发电登录 cookie。")
+
+            break
+
         data = raw.get("data", {})
-        
         page_items, has_more = extract_album_list(data)
 
         if not page_items:

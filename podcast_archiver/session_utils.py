@@ -22,6 +22,24 @@ AFDIAN_COOKIE_DOMAINS = [
 ]
 
 
+def _print_cookie_summary(session_obj: requests.Session) -> None:
+    cookies = sorted(
+        [
+            (c.name, c.domain, c.path)
+            for c in session_obj.cookies
+        ],
+        key=lambda x: (x[1], x[0], x[2]),
+    )
+
+    if not cookies:
+        print("[INFO] cookie names: (none)")
+        return
+
+    print("[INFO] cookies loaded:")
+    for name, domain, path in cookies:
+        print(f"  - {name} | domain={domain} | path={path}")
+
+
 def _normalize_domain(domain: str) -> str:
     """
     允许传入:
@@ -135,6 +153,11 @@ def create_session(browser: str | None = None, domain: str = "listennotes.com"):
         cookie_names = sorted({c.name for c in session.cookies})
 
         print(f"[INFO] {browser} cookies loaded for {domain}")
+        _print_cookie_summary(session)
+
+        if not cookie_names:
+            print("[WARN] no browser cookies loaded. Make sure the target site is logged in with this browser profile.")
+    
         print(
             "[INFO] cookie names:",
             ", ".join(cookie_names) if cookie_names else "(none)",
