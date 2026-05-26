@@ -283,7 +283,7 @@ def handle_rss(rss_url: str, args) -> int:
                             episode,
                             output_dir=args.output,
                             session=session,
-                            write_tag=not args.no_tag,
+                            write_tag=False,
                             retag_existing=args.retag_existing,
                         )
                         print("done:", output_path)
@@ -307,7 +307,7 @@ def handle_rss(rss_url: str, args) -> int:
                     episode,
                     output_dir=args.output,
                     session=session,
-                    write_tag=not args.no_tag,
+                    write_tag=False,
                     retag_existing=args.retag_existing,
                 )
                 print("done:", output_path)
@@ -319,6 +319,7 @@ def handle_rss(rss_url: str, args) -> int:
                 continue
 
         return 0
+
 
     # aria2 batch 下载后统一补 tag。
     # 注意：已存在但缺 tag 的文件，也会在这里被补上。
@@ -354,6 +355,10 @@ def handle_rss(rss_url: str, args) -> int:
                 print(f"[INFO] basic tags exist, skip retag: {target_path}")
                 continue
 
+
+            track_index = track_index_map.get(episode.audio_url)
+            print(f"[INFO] RSS track index: {track_index}/{track_total} | {episode.title}")
+
             if episode.ext.lower() in [".m4a", ".mp4"]:
                 tag_m4a(
                     str(target_path),
@@ -363,7 +368,7 @@ def handle_rss(rss_url: str, args) -> int:
                     description=episode.description,
                     cover_url=episode.cover_url,
                     session=session,
-                    track_index=track_index_map.get(episode.audio_url),
+                    track_index=track_index,
                     track_total=track_total,
                 )
 
@@ -376,7 +381,7 @@ def handle_rss(rss_url: str, args) -> int:
                     description=episode.description,
                     cover_url=episode.cover_url,
                     session=session,
-                    track_index=track_index_map.get(episode.audio_url),
+                    track_index=track_index,
                     track_total=track_total,
                 )
             else:
