@@ -209,7 +209,7 @@ def fetch_rss_content(rss_url: str, session=None) -> bytes:
     return resp.content
 
 
-def parse_rss_feed(rss_url: str, session=None) -> list[Episode]:
+def parse_rss_feed(rss_url: str, session=None) -> tuple[list[Episode], dict[str, int], int]:
     """
     解析 podcast RSS feed，返回 Episode 列表。
 
@@ -275,9 +275,22 @@ def parse_rss_feed(rss_url: str, session=None) -> list[Episode]:
         timestamp = _entry_timestamp(entry)
         episodes_with_time.append((timestamp, episode))
 
+    # 先按发布时间老到新生成 track index：
+    # 最早发布 = 1，后续递增
+    chronological = sorted(episodes_with_time, key=lambda item: item[0])
+
+    track_total = len(chronological)
+    track_index_map = {
+        episode.audio_url: index
+        for index, (_, episode) in enumerate(chronological, start=1)
+    }
+
+    # 对外仍然保持新到旧，避免破坏 --latest n 语义
     episodes_with_time.sort(key=lambda item: item[0], reverse=True)
 
-    return [episode for _, episode in episodes_with_time]
+    episodes = [episode for _, episode in episodes_with_time]
+
+    return episodes, track_index_map, track_total
 
 
 def print_episodes(episodes: Iterable[Episode], limit: int | None = None):

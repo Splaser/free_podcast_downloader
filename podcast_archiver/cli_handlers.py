@@ -159,7 +159,7 @@ def handle_listen_notes_url(url: str, args) -> int:
         episode,
         output_dir=args.output,
         session=session,
-        write_tag=not args.no_tag,
+        write_tag=False,
         retag_existing=args.retag_existing,
     )
 
@@ -200,7 +200,7 @@ def handle_wechat_url(url: str, args) -> int:
 def handle_rss(rss_url: str, args) -> int:
     session = create_session(browser=None)
 
-    episodes = parse_rss_feed(rss_url, session=session)
+    episodes, track_index_map, track_total = parse_rss_feed(rss_url, session=session)
     print(f"[INFO] parsed total RSS episodes: {len(episodes)}")
 
     offset = max(args.offset or 0, 0)
@@ -363,6 +363,8 @@ def handle_rss(rss_url: str, args) -> int:
                     description=episode.description,
                     cover_url=episode.cover_url,
                     session=session,
+                    track_index=track_index_map.get(episode.audio_url),
+                    track_total=track_total,
                 )
 
             elif episode.ext.lower() == ".mp3":
@@ -374,8 +376,9 @@ def handle_rss(rss_url: str, args) -> int:
                     description=episode.description,
                     cover_url=episode.cover_url,
                     session=session,
+                    track_index=track_index_map.get(episode.audio_url),
+                    track_total=track_total,
                 )
-
             else:
                 print(f"[WARN] tagging skipped for unsupported ext: {episode.ext}")
 
