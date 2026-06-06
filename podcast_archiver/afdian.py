@@ -586,6 +586,39 @@ def _episode_from_item(
     )
 
 
+def _guess_single_post_album_from_title(title: str) -> str:
+    """
+    从爱发电单条 post 标题推断 album。
+
+    例：
+    “十年直播”精修版之“柏小莲”：简中媒体消亡史。
+    -> “十年直播”精修版
+    """
+    title = (title or "").strip()
+
+    patterns = [
+        # “十年直播”精修版之“柏小莲”：xxx
+        r"^(.{2,80}?)\s*之\s*[“\"《（(【\[]?.{1,80}",
+
+        # 兜底：xxx：yyy / xxx: yyy
+        # 避免太短标题误切，要求冒号前至少 4 个字符
+        r"^(.{4,80}?)\s*[：:]\s*.{2,}",
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, title)
+        if not m:
+            continue
+
+        album = m.group(1).strip()
+        album = album.strip(" -_—－:：，,、")
+        if len(album) >= 2:
+            return album
+
+    return POST_OUTPUT_TITLE
+
+
+
 def print_afdian_episode(episode: Episode, index: int | None = None) -> None:
     prefix = f"{index}. " if index is not None else ""
 
@@ -741,9 +774,15 @@ def get_single_post_episode(
     domain: str = AFDIAN_DOMAIN,
 ) -> Episode | None:
     item = get_post_from_page(post_id, session=session, domain=domain)
+
+    title = str(item.get("title") or "").strip()
+    podcast_title = _guess_single_post_album_from_title(title)
+
+    print(f"[INFO] single post album guessed: {podcast_title}")
+    
     return _episode_from_item(
         item,
-        podcast_title=POST_OUTPUT_TITLE,
+        podcast_title=podcast_title,
         source_url=f"https://{domain}/p/{post_id}",
     )
 
