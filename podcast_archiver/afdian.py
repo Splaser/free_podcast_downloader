@@ -586,6 +586,34 @@ def _episode_from_item(
     )
 
 
+def _normalize_guessed_album(album: str) -> str:
+    """
+    对从标题里猜出来的伪 album 做归一化，避免作者改标题导致目录分裂。
+
+    例：
+    “十年直播”精修
+    “十年直播”精修版
+    -> “十年直播”精修版
+    """
+    album = (album or "").strip()
+    album = album.strip(" -_—－:：，,、")
+
+    alias_rules = [
+        # 反派影评这个系列标题近期出现过：
+        # “十年直播”精修之xxx
+        # “十年直播”精修版之xxx
+        (
+            r"^([“\"']?十年直播[”\"']?)精修$",
+            r"\1精修版",
+        ),
+    ]
+
+    for pattern, repl in alias_rules:
+        album = re.sub(pattern, repl, album)
+
+    return album or POST_OUTPUT_TITLE
+
+
 def _guess_single_post_album_from_title(title: str) -> str:
     """
     从爱发电单条 post 标题推断 album。
@@ -611,7 +639,7 @@ def _guess_single_post_album_from_title(title: str) -> str:
             continue
 
         album = m.group(1).strip()
-        album = album.strip(" -_—－:：，,、")
+        album = _normalize_guessed_album(album)
         if len(album) >= 2:
             return album
 
