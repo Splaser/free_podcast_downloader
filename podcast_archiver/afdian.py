@@ -24,7 +24,7 @@ def _extract_publish_time(ep: Episode) -> int | None:
     if not isinstance(item, dict):
         return None
 
-    value = item.get("publish_time") or item.get("publish_sn")
+    value = item.get("publish_time")
     if value is None:
         return None
 
@@ -141,17 +141,6 @@ def _assign_track_indexes(episodes: list[Episode]) -> list[Episode]:
                 f"{index}/{total} | {ep.title}"
             )
 
-    elif _has_publish_time_sort(episodes):
-        episodes = sorted(episodes, key=lambda ep: _extract_publish_time(ep) or 0)
-
-        total = len(episodes)
-        for index, ep in enumerate(episodes, start=1):
-            setattr(ep, "track_index", index)
-            setattr(ep, "track_total", total)
-            print(
-                f"[DEBUG] track index from publish_time: "
-                f"{index}/{total} | {ep.title}"
-            )
     else:
         total = len(episodes)
         for index, ep in enumerate(episodes, start=1):
@@ -662,35 +651,23 @@ def iter_album_items(
     album_id: str,
     session,
     *,
-    latest: int | None = None,
     offset: int = 0,
     domain: str = AFDIAN_DOMAIN,
 ) -> list[dict]:
     """
-    latest=None: asc 全量归档；
     latest=n: desc 取最新 n 条。
     offset 会在最终列表上应用，保持和现有 CLI 习惯一致。
     """
     items: list[dict] = []
     seen = set()
 
-    if latest is None:
-        params = {
+    params = {
             "album_id": album_id,
             "lastRank": 0,
             "rankOrder": "asc",
             "rankField": "rank",
         }
-        wanted_total = None
-
-    else:
-        params = {
-            "album_id": album_id,
-            "lastRank": 0,
-            "rankOrder": "desc",
-            "rankField": "publish_sn",
-        }
-        wanted_total = max(offset, 0) + max(latest, 0)
+    wanted_total = None
 
     while True:
         resp = session.get(
@@ -745,9 +722,6 @@ def iter_album_items(
             seen.add(key)
             items.append(item)
 
-        if wanted_total is not None and len(items) >= wanted_total:
-            break
-
         if page_items:
             params["lastRank"] = page_items[-1].get(
                 "rank",
@@ -758,11 +732,7 @@ def iter_album_items(
             break
 
     offset = max(offset or 0, 0)
-
-    if latest is None:
-        return items[offset:]
-
-    return items[offset : offset + latest]
+    return items[offset:]
 
 
 def get_album_episodes(
@@ -774,25 +744,36 @@ def get_album_episodes(
     domain: str = AFDIAN_DOMAIN,
 ) -> list[Episode]:
     album_name = get_album_name(album_id, session=session, domain=domain)
-    items = iter_album_items(
+
+    # 关键：先取全量 album 列表。
+    # 这样 _assign_track_indexes() 才能知道每一集在整个 album 里的真实位置。
+    all_items = iter_album_items(
         album_id,
         session,
-        latest=latest,
-        offset=offset,
+        offset=0,
         domain=domain,
     )
 
-    episodes: list[Episode] = []
+    all_episodes: list[Episode] = []
 
-    for item in items:
+    for item in all_items:
         ep = _episode_from_item(item, podcast_title=album_name)
         if ep:
             setattr(ep, "afdian_item", item)
-            episodes.append(ep)
+            all_episodes.append(ep)
 
+    all_episodes = _assign_track_indexes(all_episodes)
 
-    episodes = _assign_track_indexes(episodes)
-    return episodes
+    offset = max(offset or 0, 0)
+
+    if latest is None:
+        return all_episodes[offset:]
+
+    # _assign_track_indexes() 返回的是老到新排序。
+    # latest 语义应该是最新 n 条，所以从尾部倒着取，再恢复为新到旧下载。
+    selected = list(reversed(all_episodes))[offset : offset + latest]
+
+    return selected
 
 
 def get_single_post_episode(
