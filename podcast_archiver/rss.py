@@ -291,20 +291,3 @@ def parse_rss_feed(rss_url: str, session=None) -> tuple[list[Episode], dict[str,
     episodes = [episode for _, episode in episodes_with_time]
 
     return episodes, track_index_map, track_total
-
-
-def print_episodes(episodes: Iterable[Episode], limit: int | None = None):
-    """
-    简单打印 RSS 解析结果，用于 --list。
-    """
-    selected = list(episodes)
-
-    if limit is not None:
-        selected = selected[:limit]
-
-    for index, episode in enumerate(selected, start=1):
-        print(f"{index}. {episode.title}")
-        print(f"   podcast: {episode.podcast_title}")
-        print(f"   audio: {episode.audio_url}")
-        print(f"   ext: {episode.ext}")
-        print()

@@ -33,6 +33,7 @@ from .afdian import (
     download_afdian_episodes,
     print_afdian_episode,
 )
+from .cli_print import print_jobs
 
 
 def _get_arg(args, name: str, default=None):
@@ -205,29 +206,16 @@ def handle_rss(rss_url: str, args) -> int:
 
     offset = max(args.offset or 0, 0)
 
-
     if args.all:
         episodes = episodes[offset:]
     elif args.latest is not None:
         episodes = episodes[offset : offset + args.latest]
 
-
     jobs = plan_downloads(episodes, args.output)
 
     if args.list:
         print(f"[INFO] selected episodes: {len(episodes)}")
-
-        for index, job in enumerate(jobs, start=1):
-            episode = job.episode
-            print(f"{index}. {episode.title}")
-            print(f"   podcast: {episode.podcast_title}")
-            print(f"   audio: {episode.audio_url}")
-            print(f"   ext: {episode.ext}")
-            print(f"   target: {job.target_path}")
-            print(f"   exists: {job.exists}")
-            print(f"   incomplete: {job.incomplete}")
-            print()
-
+        print_jobs(jobs)
         return 0
 
     if not args.all and args.latest is None:
@@ -238,7 +226,7 @@ def handle_rss(rss_url: str, args) -> int:
     print(f"[INFO] selected episodes: {len(episodes)}")
 
     urls = []
-    episode_map = {}   # audio_url -> episode
+    episode_map = {}  # audio_url -> episode
     download_map = {}  # audio_url -> target Path
 
     for job in jobs:
@@ -269,7 +257,7 @@ def handle_rss(rss_url: str, args) -> int:
 
             pending_urls.append(job.audio_url)
             pending_filenames.append(str(job.relative_path))
-        
+
         if pending_urls:
             try:
                 download_files_aria2(
