@@ -169,8 +169,8 @@ def create_session(
             print(f"[INFO] using explicit cookie_file: {cookie_path}")
 
             if not cookie_path.exists():
-                            print(f"[WARN] cookie_file not found: {cookie_path}")
-                            cookie_file = None
+                print(f"[WARN] cookie_file not found: {cookie_path}")
+                cookie_file = None
 
         cj = _load_browser_cookies(
             browser,
@@ -216,8 +216,6 @@ def create_session(
             ", ".join(cookie_names) if cookie_names else "(none)",
         )
 
-        normalized = _normalize_domain(domain)
-
         if not cookie_names:
             print(
                 "[WARN] no browser cookies loaded. Make sure the target site is logged in with this browser profile."
@@ -231,7 +229,7 @@ def create_session(
 
             if "cf_clearance" not in cookie_names:
                 print(
-                    "[WARN] cf_clearance not found. If you get 403, open the page in browser first and pass Cloudflare."
+                    "[INFO] cf_clearance not found; okay unless Afdian returns 403."
                 )
 
     return session
