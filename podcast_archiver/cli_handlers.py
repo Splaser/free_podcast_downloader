@@ -31,7 +31,6 @@ from .afdian import (
     get_album_episodes,
     get_single_post_episode,
     download_afdian_episodes,
-    print_afdian_episode,
 )
 from .cli_print import print_jobs
 
@@ -79,8 +78,8 @@ def handle_afdian_url(url: str, args) -> int:
         print(f"[INFO] selected episodes: {len(episodes)}")
 
         if _get_arg(args, "list", False):
-            for index, episode in enumerate(episodes, start=offset + 1):
-                print_afdian_episode(episode, index=index)
+            jobs = plan_downloads(episodes, output_dir)
+            print_jobs(jobs, start=offset + 1)
             return 0
 
         download_afdian_episodes(
@@ -102,7 +101,8 @@ def handle_afdian_url(url: str, args) -> int:
             return 1
 
         if _get_arg(args, "list", False):
-            print_afdian_episode(episode)
+            jobs = plan_downloads([episode], output_dir)
+            print_jobs(jobs)
             return 0
 
         download_afdian_episodes(

@@ -15,6 +15,7 @@ AFDIAN_DOMAIN = "ifdian.net"
 AFDIAN_HOSTS = {"ifdian.net", "www.ifdian.net", "afdian.com", "www.afdian.com"}
 DEFAULT_SLEEP_TIME = 8
 POST_OUTPUT_TITLE = "single_posts"
+DEBUG_AFDIAN_API = False
 
 UrlKind = Literal["album", "post"]
 
@@ -32,14 +33,6 @@ def _extract_publish_time(ep: Episode) -> int | None:
         return int(value)
     except Exception:
         return None
-
-
-def _has_publish_time_sort(episodes: list[Episode]) -> bool:
-    if not episodes:
-        return False
-
-    count = sum(_extract_publish_time(ep) is not None for ep in episodes)
-    return count == len(episodes)
 
 
 def _episode_sub_order(title: str) -> int:
@@ -635,18 +628,6 @@ def _guess_single_post_album_from_title(title: str) -> str:
     return POST_OUTPUT_TITLE
 
 
-
-def print_afdian_episode(episode: Episode, index: int | None = None) -> None:
-    prefix = f"{index}. " if index is not None else ""
-
-    print(f"{prefix}{episode.title}")
-    print(f"   album: {episode.podcast_title}")
-    print(f"   author: {episode.author}")
-    print(f"   audio: {episode.audio_url}")
-    print(f"   ext: {episode.ext}")
-    print()
-
-
 def iter_album_items(
     album_id: str,
     session,
@@ -676,18 +657,19 @@ def iter_album_items(
             timeout=30,
         )
 
-        print("[DEBUG] album-post status:", resp.status_code)
-        print("[DEBUG] album-post url:", resp.url)
-        print("[DEBUG] album-post preview:", resp.text[:500])
+        if DEBUG_AFDIAN_API:
+            print("[DEBUG] album-post status:", resp.status_code)
+            print("[DEBUG] album-post url:", resp.url)
+            print("[DEBUG] album-post preview:", resp.text[:500])
 
         resp.raise_for_status()
 
         raw = resp.json()
-        print("[DEBUG] album-post json keys:", raw.keys())
-        print("[DEBUG] album-post ec:", raw.get("ec"))
-        print("[DEBUG] album-post msg:", raw.get("msg"))
 
-        raw = resp.json()
+        if DEBUG_AFDIAN_API:
+            print("[DEBUG] album-post json keys:", raw.keys())
+            print("[DEBUG] album-post ec:", raw.get("ec"))
+            print("[DEBUG] album-post msg:", raw.get("msg"))
 
         ec = raw.get("ec")
         em = raw.get("em") or raw.get("msg") or ""
