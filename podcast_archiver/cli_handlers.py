@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 
 from urllib.parse import urlparse
+
+from .planner import plan_downloads
 from .tagging import tag_m4a, tag_mp3, has_basic_tags, has_cover, fix_cover_only
 from .session_utils import create_session
 from .wechat import parse_wechat_article
@@ -205,14 +207,29 @@ def handle_rss(rss_url: str, args) -> int:
 
     offset = max(args.offset or 0, 0)
 
+
     if args.all:
         episodes = episodes[offset:]
     elif args.latest is not None:
         episodes = episodes[offset : offset + args.latest]
 
+
+    jobs = plan_downloads(episodes, args.output)
+
     if args.list:
         print(f"[INFO] selected episodes: {len(episodes)}")
-        print_episodes(episodes)
+
+        for index, job in enumerate(jobs, start=1):
+            episode = job.episode
+            print(f"{index}. {episode.title}")
+            print(f"   podcast: {episode.podcast_title}")
+            print(f"   audio: {episode.audio_url}")
+            print(f"   ext: {episode.ext}")
+            print(f"   target: {job.target_path}")
+            print(f"   exists: {job.exists}")
+            print(f"   incomplete: {job.incomplete}")
+            print()
+
         return 0
 
     if not args.all and args.latest is None:
@@ -222,46 +239,39 @@ def handle_rss(rss_url: str, args) -> int:
 
     print(f"[INFO] selected episodes: {len(episodes)}")
 
-    # 先统一生成 target path，方便 aria2 直接按目标文件名保存
     urls = []
     episode_map = {}   # audio_url -> episode
     download_map = {}  # audio_url -> target Path
 
-    for episode in episodes:
+    for job in jobs:
+        episode = job.episode
+
         print("title:", episode.title)
         print("podcast:", episode.podcast_title)
         print("audio:", episode.audio_url)
         print("ext:", episode.ext)
+        print("target:", job.target_path)
 
         origin = extract_original_url_from_proxy(episode.audio_url)
         if origin:
             print("[INFO] original post url:", origin)
 
-        target_path = (
-            Path(args.output)
-            / sanitize_filename(episode.podcast_title)
-            / (sanitize_filename(episode.title) + episode.ext)
-        )
-
         urls.append(episode.audio_url)
         episode_map[episode.audio_url] = episode
-        download_map[episode.audio_url] = target_path
+        download_map[episode.audio_url] = job.target_path
 
     if has_aria2():
         pending_urls = []
         pending_filenames = []
 
-        for url in urls:
-            episode = episode_map[url]
-            target_path = download_map[url]
-
-            if target_path.exists():
-                print(f"[INFO] skip existing file before aria2: {target_path}")
+        for job in jobs:
+            if job.exists:
+                print(f"[INFO] skip existing file before aria2: {job.target_path}")
                 continue
 
-            pending_urls.append(url)
-            pending_filenames.append(str(target_path.relative_to(Path(args.output))))
-
+            pending_urls.append(job.audio_url)
+            pending_filenames.append(str(job.relative_path))
+        
         if pending_urls:
             try:
                 download_files_aria2(
@@ -320,7 +330,6 @@ def handle_rss(rss_url: str, args) -> int:
 
         return 0
 
-
     # aria2 batch 下载后统一补 tag。
     # 注意：已存在但缺 tag 的文件，也会在这里被补上。
     if not args.no_tag:
@@ -329,7 +338,7 @@ def handle_rss(rss_url: str, args) -> int:
 
             if not target_path.exists():
                 continue
-            
+
             if getattr(args, "fix_cover", False):
                 if has_cover(str(target_path), episode.ext):
                     print(f"[INFO] cover exists, skip: {target_path}")
@@ -345,19 +354,21 @@ def handle_rss(rss_url: str, args) -> int:
                 )
                 continue
 
-
             aria2_control_file = target_path.with_name(target_path.name + ".aria2")
             if aria2_control_file.exists():
                 print(f"[INFO] skip tagging incomplete aria2 file: {target_path}")
                 continue
 
-            if not args.retag_existing and has_basic_tags(str(target_path), episode.ext):
+            if not args.retag_existing and has_basic_tags(
+                str(target_path), episode.ext
+            ):
                 print(f"[INFO] basic tags exist, skip retag: {target_path}")
                 continue
 
-
             track_index = track_index_map.get(episode.audio_url)
-            print(f"[INFO] RSS track index: {track_index}/{track_total} | {episode.title}")
+            print(
+                f"[INFO] RSS track index: {track_index}/{track_total} | {episode.title}"
+            )
 
             if episode.ext.lower() in [".m4a", ".mp4"]:
                 tag_m4a(
@@ -389,6 +400,7 @@ def handle_rss(rss_url: str, args) -> int:
 
     return 0
 
+
 rss_path_patterns = [
     r"/rss(?:/|$)",
     r"/feed(?:/|$)",
@@ -407,6 +419,7 @@ rss_query_keys = [
     "format=rss",
     "format=xml",
 ]
+
 
 def is_probable_rss_url(url: str) -> bool:
     """

@@ -6,6 +6,7 @@ import tempfile
 from .filename import sanitize_filename
 from .tagging import tag_m4a, tag_mp3, has_basic_tags
 from .markdown_sidecar import write_episode_markdown_sidecar
+from .planner import build_target_path
 
 import subprocess
 
