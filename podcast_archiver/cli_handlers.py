@@ -4,13 +4,12 @@ import re
 
 from urllib.parse import urlparse
 
-from .planner import plan_downloads
+from .planner import plan_downloads, build_target_path
 from .tagging import tag_m4a, tag_mp3, has_basic_tags, has_cover, fix_cover_only
 from .session_utils import create_session
 from .wechat import parse_wechat_article
 from .rss import (
     parse_rss_feed,
-    print_episodes,
     extract_original_url_from_proxy,
 )
 from .downloader import (
@@ -18,7 +17,6 @@ from .downloader import (
     download_files_aria2,
     has_aria2,
 )
-from .filename import sanitize_filename
 from .listen_notes_cursor_cache import get_best_cursor
 from .listen_notes import parse_listen_notes_episode, Episode
 from .listen_notes_list import (
@@ -715,11 +713,7 @@ def handle_listen_notes_list_url(url: str, args) -> int:
         urls.append(episode.audio_url)
         episode_map[episode.audio_url] = episode
 
-        target_path = (
-            Path(args.output)
-            / sanitize_filename(episode.podcast_title)
-            / (sanitize_filename(episode.title) + episode.ext)
-        )
+        target_path = build_target_path(episode, args.output)
         download_map[episode.audio_url] = target_path
 
     if has_aria2():
