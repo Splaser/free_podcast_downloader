@@ -129,20 +129,22 @@ def _assign_track_indexes(episodes: list[Episode]) -> list[Episode]:
         for index, ep in enumerate(episodes, start=1):
             setattr(ep, "track_index", index)
             setattr(ep, "track_total", total)
-            print(
-                f"[DEBUG] track index from title-sort: "
-                f"{index}/{total} | {ep.title}"
-            )
+            if DEBUG_AFDIAN_API:
+                print(
+                    f"[DEBUG] track index from title-sort: "
+                    f"{index}/{total} | {ep.title}"
+                )
 
     else:
         total = len(episodes)
         for index, ep in enumerate(episodes, start=1):
             setattr(ep, "track_index", index)
             setattr(ep, "track_total", total)
-            print(
-                f"[DEBUG] track index from album order: "
-                f"{index}/{total} | {ep.title}"
-                )
+            if DEBUG_AFDIAN_API:
+                print(
+                    f"[DEBUG] track index from album order: "
+                    f"{index}/{total} | {ep.title}"
+                    )
 
     return episodes
 
@@ -224,6 +226,14 @@ def _api_url(path: str, domain: str = AFDIAN_DOMAIN) -> str:
     return f"https://{domain}{path}"
 
 
+def _warn_cloudflare_403(resp, context: str) -> None:
+    if resp.status_code == 403:
+        print(
+            f"[WARN] Afdian returned 403 while {context}. "
+            "Open the page in browser first and pass Cloudflare, then retry."
+        )
+
+
 def get_album_name(album_id: str, session, domain: str = AFDIAN_DOMAIN) -> str:
     if session is None:
         raise ValueError("get_album_name() 需要传入已认证的 session")
@@ -234,6 +244,7 @@ def get_album_name(album_id: str, session, domain: str = AFDIAN_DOMAIN) -> str:
             params={"album_id": album_id},
             timeout=30,
         )
+        _warn_cloudflare_403(resp, "loading album info")
         resp.raise_for_status()
         data = resp.json()
         album_title = data.get("data", {}).get("album", {}).get("title")
@@ -497,6 +508,7 @@ def get_post_from_page(post_id: str, session, domain: str = AFDIAN_DOMAIN) -> di
 
     try:
         resp = session.get(api_url, params=params, timeout=30)
+        _warn_cloudflare_403(resp, "loading post detail")
         resp.raise_for_status()
         data = resp.json()
 
@@ -518,6 +530,7 @@ def get_post_from_page(post_id: str, session, domain: str = AFDIAN_DOMAIN) -> di
 
     url = f"https://{domain}/p/{post_id}"
     resp = session.get(url, timeout=30)
+    _warn_cloudflare_403(resp, "loading post page fallback")
     resp.raise_for_status()
     text = resp.text
 
@@ -643,12 +656,11 @@ def iter_album_items(
     seen = set()
 
     params = {
-            "album_id": album_id,
-            "lastRank": 0,
-            "rankOrder": "asc",
-            "rankField": "rank",
-        }
-    wanted_total = None
+        "album_id": album_id,
+        "lastRank": 0,
+        "rankOrder": "asc",
+        "rankField": "rank",
+    }
 
     while True:
         resp = session.get(
@@ -661,6 +673,8 @@ def iter_album_items(
             print("[DEBUG] album-post status:", resp.status_code)
             print("[DEBUG] album-post url:", resp.url)
             print("[DEBUG] album-post preview:", resp.text[:500])
+
+        _warn_cloudflare_403(resp, "loading album posts")
 
         resp.raise_for_status()
 
