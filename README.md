@@ -42,15 +42,15 @@ python main.py --url "URL"
 ```shell
 python main.py --url "URL" --list
 ```
+--list 只解析，不下载，会显示标题、音频链接、目标保存路径、文件是否已存在，以及是否存在未完成的 aria2 临时文件。
 
-下载最新 5 条：
-
+下载时，根据来源类型选择 --latest n、--all，或直接默认下载全部 URL 内容：
 ```shell
-python main.py --url "URL" --latest 5
+python main.py --url "URL" --latest 5 
+python main.py --url "URL" --all 
+python main.py --url "URL"
 ```
-
 指定输出目录：
-
 ```shell
 python main.py --url "URL" --output "E:/Podcasts"
 ```
@@ -69,9 +69,11 @@ python main.py --url "https://siji.typlog.io/feed.xml" --all
 
 RSS 会自动识别，不一定要单独使用 `--rss`。
 
+RSS 模式需要显式指定 --latest n 或 --all。程序会先拉取 feed 内容，再在本地做 --latest / --offset / --all 切片。
+
 如果系统安装了 aria2，RSS 批量下载会优先走 aria2 batch。下载完成后，程序会统一写入 metadata。
 
-如果中途 `Ctrl+C` 停止任务，可以直接重跑同一条命令。已存在的文件会跳过下载；缺少 tag 或封面的文件可以继续补写。
+如果中途 Ctrl+C 停止任务，可以直接重跑同一条命令。已存在的文件会跳过下载；未完成的 aria2 文件会保留 .aria2 控制文件，后续可以继续处理。已下载但缺少 tag 或封面的文件，可以使用 --retag-existing 或 --fix-cover 补写。
 
 ### 爱发电
 
@@ -106,6 +108,7 @@ python main.py --url "https://ifdian.net/album/你的album_id" --browser firefox
 ```shell
 python main.py --url "https://ifdian.net/album/你的album_id" --browser chrome --latest 3
 ```
+如果提示缺少 cf_clearance，通常不用处理；只有实际返回 403 时，才需要在浏览器中打开页面并通过 Cloudflare 检查后重试。
 
 ### Listen Notes
 
