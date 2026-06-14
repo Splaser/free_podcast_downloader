@@ -136,15 +136,35 @@ def _assign_track_indexes(episodes: list[Episode]) -> list[Episode]:
                 )
 
     else:
+        # Feed 型专辑优先根据发布时间排序为：最旧 -> 最新。
+        # 爱发电 API 的原始返回顺序不稳定，不能直接用于 track 编号。
+        publish_times = [
+            _extract_publish_time(ep)
+            for ep in episodes
+        ]
+
+        if episodes and all(value is not None for value in publish_times):
+            episodes = sorted(
+                episodes,
+                key=lambda ep: _extract_publish_time(ep) or 0,
+            )
+        else:
+            # 当前爱发电 album API 通常返回：最新 -> 最旧。
+            # 缺少 publish_time 时，反转为：最旧 -> 最新。
+            episodes = list(reversed(episodes))
+
         total = len(episodes)
+
         for index, ep in enumerate(episodes, start=1):
             setattr(ep, "track_index", index)
             setattr(ep, "track_total", total)
+
             if DEBUG_AFDIAN_API:
+                publish_time = _extract_publish_time(ep)
                 print(
-                    f"[DEBUG] track index from album order: "
-                    f"{index}/{total} | {ep.title}"
-                    )
+                    f"[DEBUG] track index from publish-time order: "
+                    f"{index}/{total} | publish_time={publish_time} | {ep.title}"
+                )
 
     return episodes
 
