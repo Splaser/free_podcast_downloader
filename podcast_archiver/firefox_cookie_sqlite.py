@@ -26,6 +26,45 @@ def firefox_profiles_root() -> Path | None:
     return Path.home() / ".mozilla" / "firefox"
 
 
+def _copy_sqlite_snapshot(
+    cookie_file: Path,
+) -> tuple[tempfile.TemporaryDirectory, Path]:
+    """
+    复制 SQLite 主库及 WAL/SHM，获得尽量一致的临时快照。
+    """
+    temp_dir = tempfile.TemporaryDirectory()
+
+    try:
+        temp_root = Path(temp_dir.name)
+        target_db = temp_root / cookie_file.name
+
+        shutil.copy2(cookie_file, target_db)
+
+        wal_file = cookie_file.with_name(cookie_file.name + "-wal")
+        if wal_file.exists():
+            shutil.copy2(
+                wal_file,
+                temp_root / wal_file.name,
+            )
+
+        shm_file = cookie_file.with_name(cookie_file.name + "-shm")
+        if shm_file.exists():
+            try:
+                shutil.copy2(
+                    shm_file,
+                    temp_root / shm_file.name,
+                )
+            except OSError:
+                # SHM 是辅助索引文件，SQLite通常可以重建。
+                pass
+
+        return temp_dir, target_db
+
+    except Exception:
+        temp_dir.cleanup()
+        raise
+
+
 def find_firefox_cookie_files() -> list[Path]:
     root = firefox_profiles_root()
     if not root or not root.exists():
@@ -122,9 +161,8 @@ def load_firefox_sqlite_cookies(
     """
     从指定 Firefox cookies.sqlite 中读取指定 hosts 的 cookies。
 
-    用途：
-    - browser_cookie3 自动 profile 选择失败时兜底；
-    - 处理 host-only cookie，例如 ifdian.net 的 auth_token。
+    同时复制 WAL/SHM，尽量读取 Firefox 尚未 checkpoint
+    到主数据库的最新 Cookie。
     """
     cookie_file = Path(cookie_file)
     jar = requests.cookies.RequestsCookieJar()
@@ -137,29 +175,24 @@ def load_firefox_sqlite_cookies(
     if not hosts:
         return jar
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite") as tmp:
-        tmp_path = Path(tmp.name)
+    temp_dir = None
 
     try:
-        # Firefox 运行中 cookies.sqlite 可能被锁，复制后读
-        shutil.copy2(cookie_file, tmp_path)
-
-        conn = sqlite3.connect(tmp_path)
-        cur = conn.cursor()
+        temp_dir, tmp_path = _copy_sqlite_snapshot(cookie_file)
 
         placeholders = ",".join("?" for _ in hosts)
 
-        cur.execute(
-            f"""
-            SELECT host, name, value, path, expiry, isSecure
-            FROM moz_cookies
-            WHERE host IN ({placeholders})
-            """,
-            hosts,
-        )
-
-        rows = cur.fetchall()
-        conn.close()
+        # 临时副本可写且用完即删，不强制 mode=ro，
+        # 避免 SQLite 读取 WAL 时遇到只读 SHM 问题。
+        with sqlite3.connect(tmp_path) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT host, name, value, path, expiry, isSecure
+                FROM moz_cookies
+                WHERE host IN ({placeholders})
+                """,
+                hosts,
+            ).fetchall()
 
         now = int(time.time())
 
@@ -184,7 +217,8 @@ def load_firefox_sqlite_cookies(
         print(f"[WARN] sqlite cookie load failed: {cookie_file} | {e}")
 
     finally:
-        tmp_path.unlink(missing_ok=True)
+        if temp_dir is not None:
+            temp_dir.cleanup()
 
     return jar
 
@@ -194,6 +228,8 @@ def find_best_firefox_cookiejar(
     hosts: list[str],
     required_cookie: str | None = None,
     debug: bool = False,
+    retries: int = 1,
+    retry_delay: float = 0.5,
 ) -> tuple[Path | None, requests.cookies.RequestsCookieJar]:
     """
     扫描所有 Firefox profiles，返回最匹配的 cookie jar。
@@ -215,7 +251,8 @@ def find_best_firefox_cookiejar(
         )
     else:
         print(
-            f"[INFO] scanning Firefox profiles via sqlite: {len(cookie_files)} profile(s)"
+            f"[INFO] scanning Firefox profiles via sqlite: "
+            f"{len(cookie_files)} profile(s)"
         )
 
     best_file: Path | None = None
@@ -223,18 +260,21 @@ def find_best_firefox_cookiejar(
     best_score = -1
 
     for cookie_file in cookie_files:
-        jar = load_firefox_sqlite_cookies(cookie_file, hosts=hosts)
-        names = {c.name for c in jar}
+        jar = load_firefox_sqlite_cookies(
+            cookie_file,
+            hosts=hosts,
+        )
+        jar_names = {c.name for c in jar}
 
-        score = len(names)
+        score = len(jar_names)
 
-        if required_cookie and required_cookie in names:
+        if required_cookie and required_cookie in jar_names:
             score += 1000
 
         if debug:
             print(
                 f"[DEBUG] profile={cookie_file.parent.name}, "
-                f"cookies={sorted(names) if names else []}, "
+                f"cookies={sorted(jar_names) if jar_names else []}, "
                 f"score={score}"
             )
 
@@ -243,15 +283,41 @@ def find_best_firefox_cookiejar(
             best_file = cookie_file
             best_jar = jar
 
-    names = {c.name for c in best_jar}
+    # 必须检查 best_jar，而不是循环中最后一个 profile 的 names。
+    best_names = {c.name for c in best_jar}
+
+    if (
+        required_cookie
+        and required_cookie not in best_names
+        and retries > 0
+    ):
+        if debug:
+            print(
+                f"[DEBUG] required cookie not found; "
+                f"retrying SQLite snapshot in {retry_delay:.1f}s"
+            )
+
+        time.sleep(retry_delay)
+
+        return find_best_firefox_cookiejar(
+            hosts=hosts,
+            required_cookie=required_cookie,
+            debug=debug,
+            retries=retries - 1,
+            retry_delay=retry_delay,
+        )
 
     if required_cookie:
-        if required_cookie in names and best_file:
-            print(f"[INFO] Firefox profile auto-selected: {best_file.parent.name}")
+        if required_cookie in best_names and best_file:
+            print(
+                f"[INFO] Firefox profile auto-selected: "
+                f"{best_file.parent.name}"
+            )
             print(f"[INFO] matched cookie_file: {best_file}")
         else:
             print(
-                f"[WARN] no Firefox profile contains required cookie: {required_cookie}"
+                f"[WARN] no Firefox profile contains required cookie: "
+                f"{required_cookie}"
             )
 
     return best_file, best_jar
