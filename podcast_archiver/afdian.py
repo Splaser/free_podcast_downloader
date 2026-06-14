@@ -759,10 +759,13 @@ def get_album_episodes(
     offset: int = 0,
     domain: str = AFDIAN_DOMAIN,
 ) -> list[Episode]:
-    album_name = get_album_name(album_id, session=session, domain=domain)
+    album_name = get_album_name(
+        album_id,
+        session=session,
+        domain=domain,
+    )
 
-    # 关键：先取全量 album 列表。
-    # 这样 _assign_track_indexes() 才能知道每一集在整个 album 里的真实位置。
+    # 先取全量，确保 track_index / track_total 基于完整专辑计算。
     all_items = iter_album_items(
         album_id,
         session,
@@ -773,21 +776,33 @@ def get_album_episodes(
     all_episodes: list[Episode] = []
 
     for item in all_items:
-        ep = _episode_from_item(item, podcast_title=album_name)
+        ep = _episode_from_item(
+            item,
+            podcast_title=album_name,
+        )
+
         if ep:
             setattr(ep, "afdian_item", item)
             all_episodes.append(ep)
 
+    # 统一整理为：最旧 -> 最新
     all_episodes = _assign_track_indexes(all_episodes)
 
     offset = max(offset or 0, 0)
 
-    if latest is None:
-        return all_episodes[offset:]
+    # 选择阶段统一使用：最新 -> 最旧
+    newest_first = list(reversed(all_episodes))
 
-    # _assign_track_indexes() 返回的是老到新排序。
-    # latest 语义应该是最新 n 条，所以从尾部倒着取，再恢复为新到旧下载。
-    selected = list(reversed(all_episodes))[offset : offset + latest]
+    if latest is None:
+        selected = newest_first[offset:]
+    else:
+        latest = max(latest, 0)
+        selected = newest_first[offset : offset + latest]
+
+    # 全量归档按时间顺序处理：最旧 -> 最新
+    # --latest 模式保留最新优先，方便先下载用户最需要的内容。
+    if latest is None:
+        selected.reverse()
 
     return selected
 
