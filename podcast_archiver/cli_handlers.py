@@ -79,7 +79,7 @@ def handle_afdian_url(url: str, args) -> int:
 
         if _get_arg(args, "list", False):
             jobs = plan_downloads(episodes, output_dir)
-            print_jobs(jobs, start=offset + 1)
+            print_jobs(jobs)
             return 0
 
         download_afdian_episodes(
