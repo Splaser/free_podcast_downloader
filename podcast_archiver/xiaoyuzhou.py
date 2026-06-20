@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import json
 from urllib.parse import urlparse
 
@@ -20,6 +21,19 @@ def is_xiaoyuzhou_url(url: str) -> bool:
     return (
         host in XIAOYUZHOU_HOSTS
         or host.endswith(".xiaoyuzhoufm.com")
+    )
+
+
+def is_xiaoyuzhou_podcast_url(url: str) -> bool:
+    if not is_xiaoyuzhou_url(url):
+        return False
+
+    path = urlparse(url).path.rstrip("/")
+    return bool(
+        re.fullmatch(
+            r"/podcast/[0-9a-fA-F]+",
+            path,
+        )
     )
 
 
@@ -288,6 +302,102 @@ def _fill_episode_fallbacks(
     return episode
 
 
+def _episode_from_podcast_item(
+    item: dict,
+    *,
+    podcast_title: str,
+    podcast_author: str,
+    podcast_cover_url: str,
+) -> Episode | None:
+    if not isinstance(item, dict):
+        return None
+
+    episode_id = str(
+        item.get("eid")
+        or item.get("episodeId")
+        or ""
+    ).strip()
+
+    title = str(
+        item.get("title")
+        or episode_id
+        or "episode"
+    ).strip()
+
+    enclosure = item.get("enclosure") or {}
+    media = item.get("media") or {}
+
+    if not isinstance(enclosure, dict):
+        enclosure = {}
+
+    if not isinstance(media, dict):
+        media = {}
+
+    media_source = media.get("source") or {}
+
+    if not isinstance(media_source, dict):
+        media_source = {}
+
+    audio_url = str(
+        enclosure.get("url")
+        or media_source.get("url")
+        or ""
+    ).strip()
+
+    if not audio_url:
+        print(f"[WARN] Xiaoyuzhou episode has no audio: {title}")
+        return None
+
+    cover_url = (
+        _extract_image_url(item.get("image"))
+        or podcast_cover_url
+    )
+
+    source_url = (
+        f"https://www.xiaoyuzhoufm.com/episode/{episode_id}"
+        if episode_id
+        else ""
+    )
+
+    episode = Episode(
+        title=title,
+        podcast_title=podcast_title,
+        author=podcast_author or podcast_title,
+        description=str(item.get("description") or ""),
+        audio_url=audio_url,
+        cover_url=cover_url,
+        source_url=source_url,
+        ext=_guess_ext(audio_url),
+    )
+
+    setattr(
+        episode,
+        "xiaoyuzhou_item",
+        item,
+    )
+
+    return episode
+
+
+def _extract_xiaoyuzhou_publish_time(
+    episode: Episode,
+) -> str:
+    item = getattr(
+        episode,
+        "xiaoyuzhou_item",
+        None,
+    )
+
+    if not isinstance(item, dict):
+        return ""
+
+    return str(
+        item.get("pubDate")
+        or item.get("datePublished")
+        or ""
+    )
+
+
 def parse_xiaoyuzhou_episode(
     url: str,
     session,
@@ -409,3 +519,153 @@ def parse_xiaoyuzhou_episode(
         source_url=resp.url,
         ext=_guess_ext(audio_url),
     )
+
+
+def get_xiaoyuzhou_podcast_episodes(
+    url: str,
+    session,
+    *,
+    latest: int | None = None,
+    offset: int = 0,
+) -> list[Episode]:
+    if not is_xiaoyuzhou_podcast_url(url):
+        raise ValueError(f"不支持的小宇宙播客 URL: {url}")
+
+    if session is None:
+        raise ValueError(
+            "get_xiaoyuzhou_podcast_episodes() 需要传入 session"
+        )
+
+    resp = session.get(
+        url,
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(
+        resp.text,
+        "html.parser",
+    )
+
+    next_data = _load_json_script(
+        soup,
+        script_id="__NEXT_DATA__",
+    )
+
+    if not isinstance(next_data, dict):
+        raise ValueError(
+            "小宇宙播客主页没有找到 __NEXT_DATA__"
+        )
+
+    try:
+        podcast = (
+            next_data["props"]
+            ["pageProps"]
+            ["podcast"]
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "小宇宙播客主页缺少 podcast 数据"
+        ) from exc
+
+    if not isinstance(podcast, dict):
+        raise ValueError(
+            "小宇宙 podcast 数据结构异常"
+        )
+
+    podcast_title = _normalize_podcast_title(
+        str(
+            podcast.get("title")
+            or "小宇宙"
+        )
+    )
+
+    podcast_author = str(
+        podcast.get("author")
+        or podcast_title
+    ).strip()
+
+    podcast_cover_url = _extract_image_url(
+        podcast.get("image")
+    )
+
+    raw_items = podcast.get("episodes") or []
+
+    if not isinstance(raw_items, list):
+        raise ValueError(
+            "小宇宙 podcast.episodes 不是列表"
+        )
+
+    expected_count = podcast.get("episodeCount")
+
+    print(
+        f"[INFO] Xiaoyuzhou podcast parsed: "
+        f"{podcast_title}"
+    )
+    print(
+        f"[INFO] homepage episodes: {len(raw_items)}, "
+        f"episodeCount: {expected_count}"
+    )
+
+    if (
+        isinstance(expected_count, int)
+        and expected_count > len(raw_items)
+    ):
+        print(
+            "[WARN] 播客主页没有返回完整节目列表，"
+            "后续可能需要分页接口"
+        )
+
+    episodes: list[Episode] = []
+
+    for item in raw_items:
+        episode = _episode_from_podcast_item(
+            item,
+            podcast_title=podcast_title,
+            podcast_author=podcast_author,
+            podcast_cover_url=podcast_cover_url,
+        )
+
+        if episode:
+            episodes.append(episode)
+
+    # 统一整理为最旧 -> 最新，方便生成 track number。
+    episodes.sort(
+        key=_extract_xiaoyuzhou_publish_time,
+    )
+
+    total = len(episodes)
+
+    for index, episode in enumerate(
+        episodes,
+        start=1,
+    ):
+        setattr(
+            episode,
+            "track_index",
+            index,
+        )
+        setattr(
+            episode,
+            "track_total",
+            total,
+        )
+
+    offset = max(offset or 0, 0)
+
+    # CLI 选择逻辑统一按最新 -> 最旧。
+    newest_first = list(reversed(episodes))
+
+    if latest is None:
+        selected = newest_first[offset:]
+    else:
+        latest = max(latest, 0)
+        selected = newest_first[
+            offset : offset + latest
+        ]
+
+    # 全量下载恢复成最旧 -> 最新。
+    if latest is None:
+        selected.reverse()
+
+    return selected

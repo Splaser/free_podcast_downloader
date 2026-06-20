@@ -10,7 +10,10 @@ from .session_utils import create_session
 from .wechat import parse_wechat_article
 from .xiaoyuzhou import (
     is_xiaoyuzhou_url,
+    is_xiaoyuzhou_episode_url,
+    is_xiaoyuzhou_podcast_url,
     parse_xiaoyuzhou_episode,
+    get_xiaoyuzhou_podcast_episodes,
 )
 from .rss import (
     parse_rss_feed,
@@ -154,37 +157,66 @@ def handle_xiaoyuzhou_url(url: str, args) -> int:
         domain="xiaoyuzhoufm.com",
     )
 
-    episode = parse_xiaoyuzhou_episode(
-        url,
-        session=session,
-    )
+    if is_xiaoyuzhou_episode_url(url):
+        episodes = [
+            parse_xiaoyuzhou_episode(
+                url,
+                session=session,
+            )
+        ]
 
-    print_episode(episode)
+    elif is_xiaoyuzhou_podcast_url(url):
+        episodes = get_xiaoyuzhou_podcast_episodes(
+            url,
+            session=session,
+            latest=_get_arg(args, "latest", None),
+            offset=_get_arg(args, "offset", 0),
+        )
+
+    else:
+        raise ValueError(
+            f"不支持的小宇宙 URL: {url}"
+        )
+
+    for episode in episodes:
+        print_episode(episode)
 
     if _get_arg(args, "list", False):
         return 0
 
-    output_path = download_episode(
-        episode,
-        output_dir=_get_arg(
-            args,
-            "output",
-            "downloads",
-        ),
-        session=session,
-        write_tag=not _get_arg(
-            args,
-            "no_tag",
-            False,
-        ),
-        retag_existing=_get_arg(
-            args,
-            "retag_existing",
-            False,
-        ),
-    )
+    total = len(episodes)
 
-    print("done:", output_path)
+    for index, episode in enumerate(
+        episodes,
+        start=1,
+    ):
+        print(
+            f"[INFO] downloading {index}/{total}: "
+            f"{episode.title}"
+        )
+
+        output_path = download_episode(
+            episode,
+            output_dir=_get_arg(
+                args,
+                "output",
+                "downloads",
+            ),
+            session=session,
+            write_tag=not _get_arg(
+                args,
+                "no_tag",
+                False,
+            ),
+            retag_existing=_get_arg(
+                args,
+                "retag_existing",
+                False,
+            ),
+        )
+
+        print("done:", output_path)
+
     return 0
 
 
