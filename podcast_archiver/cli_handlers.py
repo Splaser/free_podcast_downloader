@@ -8,6 +8,10 @@ from .planner import plan_downloads, build_target_path
 from .tagging import tag_m4a, tag_mp3, has_basic_tags, has_cover, fix_cover_only
 from .session_utils import create_session
 from .wechat import parse_wechat_article
+from .xiaoyuzhou import (
+    is_xiaoyuzhou_url,
+    parse_xiaoyuzhou_episode,
+)
 from .rss import (
     parse_rss_feed,
     extract_original_url_from_proxy,
@@ -142,6 +146,46 @@ def print_wechat_audio(audio) -> None:
     print("mediaid:", audio.mediaid)
     print("audio:", audio.audio_url)
     print("ext:", audio.ext)
+
+
+def handle_xiaoyuzhou_url(url: str, args) -> int:
+    session = create_session(
+        browser=_get_arg(args, "browser", None),
+        domain="xiaoyuzhoufm.com",
+    )
+
+    episode = parse_xiaoyuzhou_episode(
+        url,
+        session=session,
+    )
+
+    print_episode(episode)
+
+    if _get_arg(args, "list", False):
+        return 0
+
+    output_path = download_episode(
+        episode,
+        output_dir=_get_arg(
+            args,
+            "output",
+            "downloads",
+        ),
+        session=session,
+        write_tag=not _get_arg(
+            args,
+            "no_tag",
+            False,
+        ),
+        retag_existing=_get_arg(
+            args,
+            "retag_existing",
+            False,
+        ),
+    )
+
+    print("done:", output_path)
+    return 0
 
 
 def handle_listen_notes_url(url: str, args) -> int:
@@ -444,6 +488,9 @@ def handle_url(url: str, args) -> int:
     if is_afdian_url(url):
         return handle_afdian_url(url, args)
 
+    if is_xiaoyuzhou_url(url):
+        return handle_xiaoyuzhou_url(url, args)
+
     if is_probable_rss_url(url):
         print("[INFO] URL looks like RSS feed, dispatching to RSS handler")
         return handle_rss(url, args)
@@ -505,7 +552,9 @@ def handle_url(url: str, args) -> int:
 
     print(f"[ERROR] unsupported URL host: {host}")
     print(
-        "[HINT] Currently supported URL hosts: listennotes.com, mp.weixin.qq.com, ifdian.net, afdian.com, RSS feed URLs"
+        "[HINT] Currently supported URL hosts: "
+        "xiaoyuzhoufm.com, listennotes.com, mp.weixin.qq.com, "
+        "ifdian.net, afdian.com, RSS feed URLs"
     )
     return 1
 
