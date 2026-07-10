@@ -4,6 +4,8 @@ import re
 
 from urllib.parse import urlparse
 
+from .apple_podcasts import resolve_apple_podcast_rss_url, is_apple_podcast_url
+
 from .planner import plan_downloads, build_target_path
 from .tagging import tag_m4a, tag_mp3, has_basic_tags, has_cover, fix_cover_only
 from .session_utils import create_session
@@ -15,6 +17,7 @@ from .xiaoyuzhou import (
     parse_xiaoyuzhou_episode,
     get_xiaoyuzhou_podcast_episodes,
 )
+
 from .rss import (
     parse_rss_feed,
     extract_original_url_from_proxy,
@@ -274,6 +277,19 @@ def handle_wechat_url(url: str, args) -> int:
     return 0
 
 
+def handle_apple_podcast_url(url: str, args) -> int:
+    session = create_session(browser=None)
+
+    rss_url = resolve_apple_podcast_rss_url(
+        url,
+        session=session,
+    )
+
+    print(f"[INFO] Apple Podcasts resolved RSS: {rss_url}")
+
+    return handle_rss(rss_url, args)
+
+
 def handle_rss(rss_url: str, args) -> int:
     session = create_session(browser=None)
 
@@ -526,6 +542,9 @@ def handle_url(url: str, args) -> int:
     if is_probable_rss_url(url):
         print("[INFO] URL looks like RSS feed, dispatching to RSS handler")
         return handle_rss(url, args)
+    
+    if is_apple_podcast_url(url):
+        return handle_apple_podcast_url(url, args)
 
     if "listennotes.com" in host:
         if is_listen_notes_podcast_page(url):
@@ -586,7 +605,7 @@ def handle_url(url: str, args) -> int:
     print(
         "[HINT] Currently supported URL hosts: "
         "xiaoyuzhoufm.com, listennotes.com, mp.weixin.qq.com, "
-        "ifdian.net, afdian.com, RSS feed URLs"
+        "ifdian.net, afdian.com, podcasts.apple.com, RSS feed URLs"
     )
     return 1
 
