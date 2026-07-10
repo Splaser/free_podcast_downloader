@@ -482,7 +482,6 @@ def handle_rss(rss_url: str, args) -> int:
 rss_path_patterns = [
     r"/rss(?:/|$)",
     r"/feed(?:/|$)",
-    r"/podcast(?:/|$)",
     r"/feed\.xml$",
     r"/rss\.xml$",
     r"/podcast\.xml$",
@@ -539,13 +538,13 @@ def handle_url(url: str, args) -> int:
     if is_xiaoyuzhou_url(url):
         return handle_xiaoyuzhou_url(url, args)
 
+    if is_apple_podcast_url(url):
+        return handle_apple_podcast_url(url, args)
+
     if is_probable_rss_url(url):
         print("[INFO] URL looks like RSS feed, dispatching to RSS handler")
         return handle_rss(url, args)
     
-    if is_apple_podcast_url(url):
-        return handle_apple_podcast_url(url, args)
-
     if "listennotes.com" in host:
         if is_listen_notes_podcast_page(url):
             return handle_listen_notes_list_url(url, args)
