@@ -103,68 +103,36 @@ def _track_sort_key(ep: Episode, explicit_index: int | None) -> tuple[int, int, 
 
 
 def _assign_track_indexes(episodes: list[Episode]) -> list[Episode]:
-    indexed_episodes = [
-        (ep, _extract_title_index(ep.title))
-        for ep in episodes
-    ]
-
-    explicit_count = sum(index is not None for _, index in indexed_episodes)
-
-    # 多数条目能提取编号，就认为这是编号型专辑，而不是 feed 型专辑
-    use_title_index = (
-        len(episodes) > 0
-        and explicit_count >= 3
-        and explicit_count >= len(episodes) * 0.5
-    )
-
-    if use_title_index:
-        indexed_episodes = sorted(
-            indexed_episodes,
-            key=lambda pair: _track_sort_key(pair[0], pair[1]),
-        )
-
-        episodes = [ep for ep, _ in indexed_episodes]
-
-        total = len(episodes)
-        for index, ep in enumerate(episodes, start=1):
-            setattr(ep, "track_index", index)
-            setattr(ep, "track_total", total)
-            if DEBUG_AFDIAN_API:
-                print(
-                    f"[DEBUG] track index from title-sort: "
-                    f"{index}/{total} | {ep.title}"
-                )
-
+    # 发布时间完整时，以实际发表顺序作为专辑曲目顺序。标题中的数字
+    # 可能只是系列编号，或仅出现在部分条目中，不能覆盖发布时间。
+    publish_times = [_extract_publish_time(ep) for ep in episodes]
+    if episodes and all(value is not None for value in publish_times):
+        episodes = sorted(episodes, key=lambda ep: _extract_publish_time(ep))
     else:
-        # Feed 型专辑优先根据发布时间排序为：最旧 -> 最新。
-        # 爱发电 API 的原始返回顺序不稳定，不能直接用于 track 编号。
-        publish_times = [
-            _extract_publish_time(ep)
-            for ep in episodes
-        ]
+        indexed_episodes = [(ep, _extract_title_index(ep.title)) for ep in episodes]
+        explicit_count = sum(index is not None for _, index in indexed_episodes)
 
-        if episodes and all(value is not None for value in publish_times):
-            episodes = sorted(
-                episodes,
-                key=lambda ep: _extract_publish_time(ep) or 0,
-            )
+        # 发布时间不完整时才使用标题编号回退。
+        use_title_index = (
+            explicit_count >= 3
+            and explicit_count >= len(episodes) * 0.5
+        )
+        if use_title_index:
+            indexed_episodes.sort(key=lambda pair: _track_sort_key(pair[0], pair[1]))
+            episodes = [ep for ep, _ in indexed_episodes]
         else:
             # 当前爱发电 album API 通常返回：最新 -> 最旧。
-            # 缺少 publish_time 时，反转为：最旧 -> 最新。
             episodes = list(reversed(episodes))
 
-        total = len(episodes)
-
-        for index, ep in enumerate(episodes, start=1):
-            setattr(ep, "track_index", index)
-            setattr(ep, "track_total", total)
-
-            if DEBUG_AFDIAN_API:
-                publish_time = _extract_publish_time(ep)
-                print(
-                    f"[DEBUG] track index from publish-time order: "
-                    f"{index}/{total} | publish_time={publish_time} | {ep.title}"
-                )
+    total = len(episodes)
+    for index, ep in enumerate(episodes, start=1):
+        setattr(ep, "track_index", index)
+        setattr(ep, "track_total", total)
+        if DEBUG_AFDIAN_API:
+            print(
+                f"[DEBUG] track index: {index}/{total} | "
+                f"publish_time={_extract_publish_time(ep)} | {ep.title}"
+            )
 
     return episodes
 
