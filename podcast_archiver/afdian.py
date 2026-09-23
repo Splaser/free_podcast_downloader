@@ -677,20 +677,24 @@ def iter_album_items(
         em = raw.get("em") or raw.get("msg") or ""
 
         if ec != 200:
-            print(f"[ERROR] Afdian API error: ec={ec}, em={em}")
-
+            message = f"Afdian album API error: ec={ec}, em={em}"
             if ec == 40100:
-                print("[HINT] 当前 session 没有有效登录态。请确认浏览器已登录 ifdian.net，并且脚本读取的是同一个浏览器 profile。")
-                print("[HINT] 如果 cookie names 里没有 auth_token，说明没有拿到爱发电登录 cookie。")
-
-            break
+                message += "；请确认浏览器已登录 ifdian.net，且脚本读取的是同一个 profile"
+            raise RuntimeError(message)
 
         data = raw.get("data", {})
         page_items, has_more = extract_album_list(data)
 
         if not page_items:
-            print("[WARN] 当前返回数据为空，跳过本次循环")
-            break
+            valid_empty_page = isinstance(data, list) or (
+                isinstance(data, dict)
+                and any(isinstance(value, list) for value in data.values())
+            )
+            if has_more or items or not valid_empty_page:
+                raise RuntimeError(
+                    "Afdian album pagination returned an empty page before completion"
+                )
+            return []
 
         for item in page_items:
             key = (
@@ -706,14 +710,13 @@ def iter_album_items(
             seen.add(key)
             items.append(item)
 
-        if page_items:
-            params["lastRank"] = page_items[-1].get(
-                "rank",
-                params.get("lastRank", 0) + 10,
-            )
-
         if not has_more:
             break
+
+        next_rank = page_items[-1].get("rank")
+        if next_rank is None or next_rank == params["lastRank"]:
+            raise RuntimeError("Afdian album pagination did not advance lastRank")
+        params["lastRank"] = next_rank
 
     offset = max(offset or 0, 0)
     return items[offset:]
@@ -803,8 +806,9 @@ def download_afdian_episodes(
     write_tag: bool = True,
     retag_existing: bool = False,
     sleep_time: int = DEFAULT_SLEEP_TIME,
-) -> None:
+) -> int:
     total = len(episodes)
+    failed: list[str] = []
 
     for index, episode in enumerate(episodes, start=1):
         print(f"[INFO] downloading {index}/{total}")
@@ -825,6 +829,14 @@ def download_afdian_episodes(
         except Exception as e:
             print(f"[ERROR] download failed: {episode.title}")
             print(f"[ERROR] {e}")
+            failed.append(episode.title)
 
         if index < total and sleep_time > 0:
             time.sleep(sleep_time + random() * 3)
+
+    if failed:
+        print(f"[ERROR] {len(failed)}/{total} Afdian downloads failed:")
+        for title in failed:
+            print(f"  - {title}")
+        return 1
+    return 0

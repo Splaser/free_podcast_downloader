@@ -1,5 +1,7 @@
 # podcast_archiver/downloader.py
 from pathlib import Path
+import re
+import time
 
 import requests
 import tempfile
@@ -152,25 +154,24 @@ def download_file(url: str, output_path: Path, session=None, chunk_size=1024 * 2
 def download_file_resume(
     url: str, output_path: Path, session=None, chunk_size=1024 * 256
 ):
-    key = str(output_path)
-    downloaded = _downloaded_progress.get(key, 0)
-    if output_path.exists():
-        downloaded = max(downloaded, output_path.stat().st_size)
-    _downloaded_progress[key] = downloaded
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = output_path.with_name(output_path.name + ".part")
+    control_path = partial_path.with_name(partial_path.name + ".aria2")
 
     # 优先 aria2 下载
     if has_aria2():
         try:
-            download_file_aria2(url, output_path)
+            download_file_aria2(url, partial_path)
+            if not partial_path.is_file() or control_path.exists():
+                raise RuntimeError("aria2 did not complete the partial file")
+            partial_path.replace(output_path)
             return
         except Exception as e:
             print(f"[WARN] aria2 failed ({e}), fallback to requests download")
 
     # requests fallback + chunked + retry
     s = session or requests.Session()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    headers = {
+    base_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "Accept": "audio/*,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -178,62 +179,91 @@ def download_file_resume(
         "Connection": "keep-alive",
     }
 
-    if downloaded > 0:
-        headers["Range"] = f"bytes={downloaded}-"
-
     for attempt in range(3):
+        downloaded = partial_path.stat().st_size if partial_path.exists() else 0
+        headers = dict(base_headers)
+        if downloaded:
+            headers["Range"] = f"bytes={downloaded}-"
         try:
             with s.get(
                 url, stream=True, timeout=60, headers=headers, allow_redirects=True
             ) as resp:
-                if resp.status_code not in [200, 206]:
-                    resp.raise_for_status()
-
-                # 如果本地已有部分文件，但服务端没有按 Range 返回 206，
-                # 说明它准备从头返回完整文件。此时不能 ab 追加，否则文件会损坏。
-                if downloaded > 0 and resp.status_code == 200:
-                    print(
-                        "[WARN] server ignored Range request, restarting download from 0"
+                if resp.status_code == 416 and downloaded:
+                    match = re.fullmatch(
+                        r"bytes \*/(\d+)", resp.headers.get("Content-Range", "")
                     )
-                    downloaded = 0
-                    _downloaded_progress[key] = 0
-                    mode = "wb"
-                else:
+                    if match and int(match.group(1)) == downloaded:
+                        control_path.unlink(missing_ok=True)
+                        partial_path.replace(output_path)
+                        print(f"[INFO] saved: {output_path}")
+                        return
+                if resp.status_code not in (200, 206):
+                    resp.raise_for_status()
+                    raise RuntimeError(f"unexpected download status {resp.status_code}")
+
+                if resp.status_code == 206:
+                    match = re.fullmatch(
+                        r"bytes (\d+)-(\d+)/(\d+|\*)",
+                        resp.headers.get("Content-Range", ""),
+                    )
+                    if not match or int(match.group(1)) != downloaded:
+                        raise RuntimeError("server returned a mismatched Content-Range")
+                    total = int(match.group(3)) if match.group(3) != "*" else None
                     mode = "ab" if downloaded else "wb"
-
-                total = resp.headers.get("content-length")
-
-                if total and total.isdigit():
-                    total = int(total) + downloaded if downloaded else int(total)
                 else:
+                    if downloaded:
+                        print(
+                            "[WARN] server ignored Range request, "
+                            "restarting download from 0"
+                        )
+                    downloaded = 0
                     total = None
+                    mode = "wb"
 
-                with open(output_path, mode) as f:
+                content_length = resp.headers.get("Content-Length")
+                expected = (
+                    int(content_length)
+                    if content_length and content_length.isdigit()
+                    else None
+                )
+                received = 0
+                with open(partial_path, mode) as f:
                     for chunk in resp.iter_content(chunk_size=chunk_size):
                         if chunk:
                             f.write(chunk)
-                            downloaded += len(chunk)
-                            _downloaded_progress[key] = downloaded
-                            if total:
-                                percent = min(downloaded * 100 / total, 100)
+                            received += len(chunk)
+                            if expected:
+                                percent = min(received * 100 / expected, 100)
                                 print(
                                     f"\r[INFO] downloading... {percent:.1f}%",
                                     end="",
                                     flush=True,
                                 )
+                if expected is not None and received != expected:
+                    if received > expected:
+                        partial_path.unlink()
+                    raise RuntimeError(
+                        f"incomplete response: received {received}/{expected} bytes"
+                    )
+                if total is not None and partial_path.stat().st_size != total:
+                    raise RuntimeError(
+                        f"incomplete file: {partial_path.stat().st_size}/{total} bytes"
+                    )
+                if partial_path.stat().st_size == 0:
+                    raise RuntimeError("download returned an empty file")
             print()
+            control_path.unlink(missing_ok=True)
+            partial_path.replace(output_path)
             print(f"[INFO] saved: {output_path}")
             return
-        except requests.exceptions.RequestException as e:
+        except (requests.exceptions.RequestException, RuntimeError) as e:
             print(f"[WARN] download attempt {attempt+1}/3 failed: {e}")
             if attempt < 2:
-                import time
-
                 time.sleep(3)
             else:
                 raise RuntimeError(
                     f"[ERROR] Failed to download after 3 attempts: {url}"
-                )
+                ) from e
 
 
 def download_episode(
@@ -257,7 +287,21 @@ def download_episode(
 
     output_path = build_target_path(episode, output_dir)
 
-    file_existed = output_path.exists()
+    # 旧版 aria2 曾直接写最终路径；其控制文件表明该文件尚未完成。
+    legacy_control = output_path.with_name(output_path.name + ".aria2")
+    was_incomplete = legacy_control.exists()
+    if was_incomplete:
+        partial_path = output_path.with_name(output_path.name + ".part")
+        if output_path.exists() and not partial_path.exists():
+            output_path.replace(partial_path)
+            legacy_control.replace(partial_path.with_name(partial_path.name + ".aria2"))
+        else:
+            # 已有 .part 时以它为续传来源，丢弃旧版未完成的最终路径。
+            output_path.unlink(missing_ok=True)
+            legacy_control.unlink()
+        print(f"[INFO] resuming incomplete file: {output_path}")
+
+    file_existed = output_path.exists() and not was_incomplete
 
     if file_existed:
         if write_tag:
@@ -275,7 +319,7 @@ def download_episode(
         download_file_resume(episode.audio_url, output_path, session=session)
 
     if write_tag and episode.ext.lower() in [".m4a", ".mp4"]:
-        tag_m4a(
+        tagged = tag_m4a(
             str(output_path),
             title=episode.title,
             artist=episode.author or episode.podcast_title,
@@ -288,7 +332,7 @@ def download_episode(
         )
 
     elif write_tag and episode.ext.lower() == ".mp3":
-        tag_mp3(
+        tagged = tag_mp3(
             str(output_path),
             title=episode.title,
             artist=episode.author or episode.podcast_title,
@@ -302,6 +346,10 @@ def download_episode(
 
     elif write_tag:
         print(f"[WARN] tagging skipped for unsupported ext: {episode.ext}")
+        tagged = True
+
+    if write_tag and not tagged:
+        raise RuntimeError(f"failed to write metadata tags: {output_path}")
 
     try:
         write_episode_markdown_sidecar(

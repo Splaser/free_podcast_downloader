@@ -92,14 +92,13 @@ def handle_afdian_url(url: str, args) -> int:
             print_jobs(jobs)
             return 0
 
-        download_afdian_episodes(
+        return download_afdian_episodes(
             episodes,
             output_dir=output_dir,
             session=session,
             write_tag=not _get_arg(args, "no_tag", False),
             retag_existing=_get_arg(args, "retag_existing", False),
         )
-        return 0
 
     if kind == "post":
         if latest is not None:
@@ -115,7 +114,7 @@ def handle_afdian_url(url: str, args) -> int:
             print_jobs(jobs)
             return 0
 
-        download_afdian_episodes(
+        return download_afdian_episodes(
             [episode],
             output_dir=output_dir,
             session=session,
@@ -123,7 +122,6 @@ def handle_afdian_url(url: str, args) -> int:
             retag_existing=_get_arg(args, "retag_existing", False),
             sleep_time=0,
         )
-        return 0
 
     print(f"[ERROR] unsupported Afdian resource kind: {kind}")
     return 1
